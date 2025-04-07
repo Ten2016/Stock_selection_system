@@ -4,40 +4,40 @@ from datetime import datetime
 
 import akshare as ak
 import pandas as pd
-import mplfinance as mpf
-import matplotlib.pyplot as plt
+# import mplfinance as mpf
+# import matplotlib.pyplot as plt
 
 from func_1 import *
 from mongo_opr import *
 
 
-# 绘制蜡烛图并叠加布林线
-def data_plot(df, stock_code):
-    # 重命名列名以符合 mplfinance 的要求
-    df.rename(columns={
-        '日期': 'Date',
-        '开盘': 'Open',
-        '最高': 'High',
-        '最低': 'Low',
-        '收盘': 'Close',
-        '成交量': 'Volume'
-    }, inplace=True)
+# # 绘制蜡烛图并叠加布林线
+# def data_plot(df, stock_code):
+#     # 重命名列名以符合 mplfinance 的要求
+#     df.rename(columns={
+#         '日期': 'Date',
+#         '开盘': 'Open',
+#         '最高': 'High',
+#         '最低': 'Low',
+#         '收盘': 'Close',
+#         '成交量': 'Volume'
+#     }, inplace=True)
 
-    # 将日期列设置为索引，并转换为 DatetimeIndex
-    df['Date'] = pd.to_datetime(df['Date'])
-    df.set_index('Date', inplace=True)
+#     # 将日期列设置为索引，并转换为 DatetimeIndex
+#     df['Date'] = pd.to_datetime(df['Date'])
+#     df.set_index('Date', inplace=True)
 
-    # 创建布林线的绘图对象
-    apds = [
-        mpf.make_addplot(df['中轨'], color='blue', width=1.8),  # 中轨
-        mpf.make_addplot(df['上轨'], color='red', width=1.8),   # 上轨
-        mpf.make_addplot(df['下轨'], color='green', width=1.8),  # 下轨
-        mpf.make_addplot(df['MA5'], color='orange', width=1.0),  # 5日移动平均线
-        mpf.make_addplot(df['MA10'], color='black', width=1.0)  # 10日移动平均线
-    ]
+#     # 创建布林线的绘图对象
+#     apds = [
+#         mpf.make_addplot(df['中轨'], color='blue', width=1.8),  # 中轨
+#         mpf.make_addplot(df['上轨'], color='red', width=1.8),   # 上轨
+#         mpf.make_addplot(df['下轨'], color='green', width=1.8),  # 下轨
+#         mpf.make_addplot(df['MA5'], color='orange', width=1.0),  # 5日移动平均线
+#         mpf.make_addplot(df['MA10'], color='black', width=1.0)  # 10日移动平均线
+#     ]
 
-    # 绘制蜡烛图并叠加布林线
-    mpf.plot(df, type='candle', style='charles', title=f'{stock_code}', volume=True, addplot=apds)
+#     # 绘制蜡烛图并叠加布林线
+#     mpf.plot(df, type='candle', style='charles', title=f'{stock_code}', volume=True, addplot=apds)
 
 
 def data_select():
