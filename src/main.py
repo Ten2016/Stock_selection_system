@@ -7,9 +7,9 @@ import pandas as pd
 # import mplfinance as mpf
 # import matplotlib.pyplot as plt
 
-from func_1 import *
-from mongo_opr import *
-
+from stocks.mongo_opr import *
+from utils.mongo import *
+from stocks.func_1 import *
 
 # # 绘制蜡烛图并叠加布林线
 # def data_plot(df, stock_code):

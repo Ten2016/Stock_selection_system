@@ -1,8 +1,48 @@
-import akshare as ak
 import pandas as pd
-from datetime import datetime, date
+import akshare as ak
+
+
+def calculate_move_mean(data):
+    """
+    计算移动平均线
+
+    :param data: 包含收盘价的 DataFrame
+    :return: 包含MACD值的 DataFrame
+    """
+
+    data['MA5']  = data['收盘'].rolling(window=5).mean().round(2)
+    data['MA10'] = data['收盘'].rolling(window=10).mean().round(2)
+    data['MA20'] = data['收盘'].rolling(window=20).mean().round(2)
+    data['MA30'] = data['收盘'].rolling(window=30).mean().round(2)
+    data['MA60'] = data['收盘'].rolling(window=60).mean().round(2)
+
+    return data
+
+
+def calculate_bollinger_bands(data, window=20):
+    """
+    计算布林带
+
+    :param data: 包含收盘价的 DataFrame
+    :param window: 布林带窗(默认20天)
+    :return: 包含上轨、下轨的 DataFrame
+    """
+
+    bzc = data['收盘'].rolling(window=window).std().round(2)  # 20日标准差
+
+    # data['中轨'] = data['MA20']
+    data['上轨'] = (data['MA20'] + 2 * bzc).round(2)  # 上轨
+    data['下轨'] = (data['MA20'] - 2 * bzc).round(2)  # 下轨
+
+    return data
+
 
 def get_all_stocks():
+    """
+    获取A法股所有股票总览数据
+
+    :return: 总览股票信息的 DataFrame
+    """
 
     df = ak.stock_zh_a_spot_em()
     print('A股所有股票信息, 数量: ', len(df), '数据类型: ', type(df))
@@ -24,48 +64,31 @@ def get_all_stocks():
     # 将总市值转换为亿为单位
     df['总市值'] = (df['总市值'] / 1e8).astype(int)
 
-    # 将总市值转换为亿为单位
+    # 将流通市值转换为亿为单位
     df['流通市值'] = (df['流通市值'] / 1e8).astype(int)
 
     del df['序号']
 
     df.sort_values('总市值', inplace=True, ascending=False, na_position='last')
-
     print("去除异常数据后数量: ", len(df))
 
     return df
 
 
-def calculate_move_mean(data):
+def get_one_stock_history(stock_code, start_date, end_date):
     """
-    计算移动平均线
-    :param data: 包含收盘价的 DataFrame
-    """
-    data['MA5'] = data['收盘'].rolling(window=5).mean().round(2)
-    data['MA10'] = data['收盘'].rolling(window=10).mean().round(2)
-    data['MA20'] = data['收盘'].rolling(window=20).mean().round(2)
-    data['MA30'] = data['收盘'].rolling(window=30).mean().round(2)
-    data['MA60'] = data['收盘'].rolling(window=60).mean().round(2)
-    return data
-
-def calculate_bollinger_bands(data, window=20):
-    """
-    计算布林带
-    :param data: 包含收盘价的 DataFrame
-    :param window: 布林带窗口（默认20天）
-    :return: 包含中轨、上轨、下轨的 DataFrame
+    获取指定股票的指定时间范围内的历史数据
+    
+    :param stock_code: 股票代码
+    :param start_date: 开始日期
+    :param end_date: 结束日期
+    :return: 股票历史数据了
     """
 
-    bzc = data['收盘'].rolling(window=window).std().round(2)  # 20日标准差
-
-    data['上轨'] = (data['MA20'] + 2 * bzc).round(2)  # 上轨
-    data['下轨'] = (data['MA20'] - 2 * bzc).round(2)  # 下轨
-    return data
-
-def get_one_stock_history(code, start_date, end_date):
     # 获取历史数据
-    df = ak.stock_zh_a_hist(symbol=code, period="daily", start_date=start_date, end_date=end_date, adjust="qfq")
+    df = ak.stock_zh_a_hist(symbol=stock_code, period="daily", start_date=start_date, end_date=end_date, adjust="qfq")
 
+    # 转为时间戳
     df['日期'] = (pd.to_datetime(df['日期']).astype('int64') // 10**9).astype('int64')
 
     # 计算移动平均线
@@ -79,7 +102,6 @@ def get_one_stock_history(code, start_date, end_date):
     for _, row in df.iterrows():
 
         del row['股票代码']
-
         record = row.to_dict()
         
         # 处理 NaN 值（MongoDB 无法存储 NaN）

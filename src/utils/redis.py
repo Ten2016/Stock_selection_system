@@ -1,9 +1,9 @@
+import time
 import redis
 
-import time
 
 
-
+# 基本功能测试
 if __name__ == "__main__":
     client = redis.Redis()
 
@@ -186,6 +186,12 @@ if __name__ == "__main__":
     print('key size:', client.dbsize())
 
     print(client.info())
+
+    print(client.config_get('dir'))
+    print(client.config_get('maxclients'))
+
+    client.save()
+    client.bgsave()
 
     client.flushdb()
     client.flushall()
