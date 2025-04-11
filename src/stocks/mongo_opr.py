@@ -1,4 +1,6 @@
 
+import datetime as dt
+
 from utils.mongo import *
 
 def save_to_mongodb(data, db, coll_name, drop = False):
@@ -47,17 +49,16 @@ def get_stock_history_end_date(db, stock_code):
     """
 
     coll_name = STOCK_ONE_COLL_NAME + stock_code
-    condition = {"代码": stock_code}
     options = {'sort': [("日期", -1)]}
     limit = 1
 
     # 查询数据
-    data = mongodb_query(db, coll_name, condition, options, limit)
+    data = mongodb_query(db, coll_name, None, options, limit)
     if len(data) == 0:
         return None
     
-    timestamp = data[0]['日期']
-    return data[0]['']
+    end_date = data[0]['日期']
+    return dt.datetime.fromtimestamp(end_date).strftime("%Y%m%d")
 
 
 

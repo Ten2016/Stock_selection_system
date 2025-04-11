@@ -1,0 +1,9 @@
+# 检查python不依赖包是否已安装
+
+# 检查mongodb是否已安装
+
+# 检查redis是否已安装
+
+# 添加环境变量
+current_dir=$(pwd)
+export PYTHONPATH="${PYTHONPATH}:${current_dir}/src"
