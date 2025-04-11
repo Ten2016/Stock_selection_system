@@ -7,9 +7,9 @@ import pandas as pd
 # import mplfinance as mpf
 # import matplotlib.pyplot as plt
 
-from stocks.mongo_opr import *
 from utils.mongo import *
-from stocks.func_1 import *
+from stocks.mongo_opr import *
+from stocks.select_func import *
 
 # # 绘制蜡烛图并叠加布林线
 # def data_plot(df, stock_code):
@@ -48,20 +48,31 @@ def data_select():
 
     db = client[DB_NAME]
 
-    condition = {"代码": "601600"}
+    # 选择沪深主板，市值大于100亿
+    condition = {"代码": {"$regex": "^[0-9]{6}$"}, "总市值": {"$gte": 100}}
+    options = {'sort': [("总市值", -1)]}
+    limit = 1000
 
-    stocks = mongodb_query(db, STOCK_ALL_COLL_NAME, condition)
+    # 查询数据
+    stocks = mongodb_query(db, STOCK_ALL_COLL_NAME, condition, options, limit)
+    if len(stocks) == 0:
+        print("没有符合条件的股票")
+        return results
+    print(f"符合条件的股票数量: {len(stocks)}")
+
 
     # 遍历股票代码，筛选符合条件的股票
     for row in stocks:
         print(row["名称"], row["代码"], row["总市值"])
         coll_name = STOCK_ONE_COLL_NAME + row["代码"]
-        data = mongodb_query(db, coll_name)
+        options = {'sort': [("日期", -1)]}
+        limit = 20
+        data = mongodb_query(db, coll_name, options=options, limit=limit)
         if len(data) != 0:
             # 检查是否存在满足要求的日期
-            valid_date = check_valid_3(data)
-            if len(valid_date) == 0:
-                break
+            valid_date = select_trategy_1(data)
+            if valid_date == None or len(valid_date) == 0:
+                continue
             
             # 绘制走势图
             # data_plot(df, stock_code)
@@ -81,8 +92,12 @@ def main():
     print("符合条件的股票数量: ", len(ans))
 
     formatted_output = '\n'.join(map(str, ans))
-    print(formatted_output)
 
+    file_name = 'output.txt'
+    with open(file_name, 'w', encoding='utf-8') as file:
+        file.write(formatted_output)
+
+    print(f"结果已保存到 {file_name}")
 
 
 if __name__ == "__main__":
