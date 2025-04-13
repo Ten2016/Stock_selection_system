@@ -86,15 +86,14 @@ def mongodb_query(
 
     try:
         collection = db[coll_name]
-        cursor = collection.find(query_cond)
-        
-        # 应用选项参数
-        if "projection" in options:
-            cursor = cursor.projection(options["projection"])
-        if "sort" in options:
-            cursor = cursor.sort(options["sort"])
-        if "skip" in options:
-            cursor = cursor.skip(options["skip"])
+
+        cursor = collection.find(
+            filter=query_cond,
+            projection=options.get("projection"),
+            sort=options.get("sort"),
+            skip=options.get("skip", 0)
+        )
+
         if limit > 0:
             cursor = cursor.limit(limit)
             

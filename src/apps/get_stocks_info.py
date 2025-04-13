@@ -10,7 +10,12 @@ DFT_END_DATE   = "20250411"  #dt.datetime.now().strftime("%Y%m%d")  # 默认结�
 
 if __name__ == "__main__":
 
-    client = MongoClient(MONGO_URI)
+    client = MongoClient(
+        MONGO_URI,
+        connectTimeoutMS=600000,  # 连接超时 10 分钟
+        serverSelectionTimeoutMS=600000,  # 服务器选择超时 10 分钟
+        socketTimeoutMS=600000  # 单个操作超时 10 分钟
+    )
 
     db = client[DB_NAME]
 

@@ -103,6 +103,9 @@ def get_one_stock_history(stock_code, start_date, end_date):
 
         del row['股票代码']
         record = row.to_dict()
+
+        # 成交额转为以万为单位
+        record['成交额'] //= 1e4
         
         # 处理 NaN 值（MongoDB 无法存储 NaN）
         for key, value in record.items():

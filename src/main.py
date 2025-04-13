@@ -9,7 +9,7 @@ import pandas as pd
 
 from utils.mongo import *
 from stocks.mongo_opr import *
-from stocks.select_func import *
+from stocks.select_trategy import *
 
 # # 绘制蜡烛图并叠加布林线
 # def data_plot(df, stock_code):
@@ -51,10 +51,9 @@ def data_select():
     # 选择沪深主板，市值大于100亿
     condition = {"代码": {"$regex": "^[0-9]{6}$"}, "总市值": {"$gte": 100}}
     options = {'sort': [("总市值", -1)]}
-    limit = 1000
 
     # 查询数据
-    stocks = mongodb_query(db, STOCK_ALL_COLL_NAME, condition, options, limit)
+    stocks = mongodb_query(db, STOCK_ALL_COLL_NAME, condition, options)
     if len(stocks) == 0:
         print("没有符合条件的股票")
         return results
@@ -66,7 +65,7 @@ def data_select():
         print(row["名称"], row["代码"], row["总市值"])
         coll_name = STOCK_ONE_COLL_NAME + row["代码"]
         options = {'sort': [("日期", -1)]}
-        limit = 20
+        limit = 30
         data = mongodb_query(db, coll_name, options=options, limit=limit)
         if len(data) != 0:
             # 检查是否存在满足要求的日期

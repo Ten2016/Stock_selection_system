@@ -41,7 +41,7 @@ def print_from_mongodb(db, coll_name, limit=10):
 
 def get_stock_history_end_date(db, stock_code):
     """
-    从MongoDB读取制定股票代码的最新一条记录的日期
+    从MongoDB读取指定股票代码的最新一条记录的日期
 
     :param db: db对象
     :param stock_code: 股票代码

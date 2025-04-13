@@ -21,7 +21,7 @@ def select_trategy_1(data):
         if x['收盘'] <= x['下轨']:
             date_x = dt.datetime.fromtimestamp(x['日期'],
                         tz=dt.timezone(dt.timedelta(hours=8))).strftime('%Y-%m-%d')
-            print(f"日期：{date_x}，收盘价：{x['收盘']}，下轨：{x['下轨']}")
+            # print(f"日期：{date_x}，收盘价：{x['收盘']}，下轨：{x['下轨']}")
 
             # 检查是否重新站上五日线
             for j in range(i - 1, -1, -1):
@@ -32,7 +32,7 @@ def select_trategy_1(data):
                 if y['收盘'] >= y['MA5']:
                     date_y = dt.datetime.fromtimestamp(y['日期'],
                                 tz=dt.timezone(dt.timedelta(hours=8))).strftime('%Y-%m-%d')
-                    print(f"  日期：{date_y}，收盘价：{y['收盘']}, MA5: {y['MA5']}")
+                    # print(f"  日期：{date_y}，收盘价：{y['收盘']}, MA5: {y['MA5']}")
 
                     # 检查是否再次出现阴线
                     for k in range(j - 1, -1, -1):
@@ -43,7 +43,7 @@ def select_trategy_1(data):
                         if z['收盘'] <= z['开盘']:
                             date_z = dt.datetime.fromtimestamp(z['日期'],
                                         tz=dt.timezone(dt.timedelta(hours=8))).strftime('%Y-%m-%d')
-                            print(f"    日期：{date_z}，开盘价：{z['开盘']}, 收盘价: {z['收盘']}")
+                            # print(f"    日期：{date_z}，开盘价：{z['开盘']}, 收盘价: {z['收盘']}")
 
                             # 返回符合条件的日期
                             return [date_x, x['收盘'], x['下轨'],
