@@ -3,7 +3,9 @@ import datetime as dt
 
 def select_trategy_1(data):
     """
-    从当前日期开始，向前遍历数据，寻找布林下轨大于等于当天收盘价，且在之后重新站上五日线的日期
+    从当前日期开始，向前遍历数据，寻找布林下轨大于等于当天收盘价，且:
+    1. 在之后重新站上五日线的日期
+    2. 在之后出现阴线，且收盘价低于前一天收盘价
 
     :param data: 包含日期、收盘价、布林下轨的股票历史数据
     :return: 符合条件的日期
@@ -40,7 +42,7 @@ def select_trategy_1(data):
                         if z['开盘'] == None or z['收盘'] == None:
                             continue
 
-                        if z['收盘'] <= z['开盘']:
+                        if z['收盘'] <= z['开盘'] and z['收盘'] <= data[k + 1]['收盘']:
                             date_z = dt.datetime.fromtimestamp(z['日期'],
                                         tz=dt.timezone(dt.timedelta(hours=8))).strftime('%Y-%m-%d')
                             # print(f"    日期：{date_z}，开盘价：{z['开盘']}, 收盘价: {z['收盘']}")

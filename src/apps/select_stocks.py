@@ -65,7 +65,7 @@ def data_select(db, stocks):
 
         results.append([row["名称"], row["代码"], row["总市值"], valid_date])
 
-        print(results.len(), results[-1])
+        print(len(results), results[-1])
 
         time.sleep(0.1)
     
@@ -86,7 +86,7 @@ if __name__ == "__main__":
 
 
     # 挑选符合条件的股票
-    ans = data_select(db, stocks_list)
+    ans = data_select(db, stocks_list[:100])
     print("符合条件的股票数量: ", len(ans))
 
     formatted_output = '\n'.join(map(str, ans))

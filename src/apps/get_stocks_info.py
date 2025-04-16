@@ -4,8 +4,8 @@ import datetime as dt
 from utils.stock import *
 from stocks.mongo_opr import *
 
-DFT_START_DATE = "20240101"                         # 默认开始日期
-DFT_END_DATE   = "20250411"  #dt.datetime.now().strftime("%Y%m%d")  # 默认结束日期
+DFT_START_DATE = "20240101"                             # 默认开始日期
+DFT_END_DATE   = dt.datetime.now().strftime("%Y%m%d")   # 默认结束日期
 
 
 if __name__ == "__main__":
@@ -34,7 +34,7 @@ if __name__ == "__main__":
             continue
 
         cnt += 1
-        if cnt > 1000:
+        if cnt > 100:
             break
 
         start_date = get_stock_history_end_date(db, row.代码)
