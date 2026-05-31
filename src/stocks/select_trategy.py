@@ -124,3 +124,25 @@ def select_trategy_3(data):
         i += 1
 
     return ans
+
+
+def select_strategy_new(data):
+    """
+    检查是否在最近的10天内，连续两天站上5日线
+    :param data: 包含日期、收盘价、MA5的 DataFrame
+    :return: 如果满足条件返回 True，否则返回 False
+    """
+    # 获取最近10天的数据
+    recent_data = data[-10:]
+    consecutive_days = 0
+    for x in recent_data:
+        # 检查收盘价和MA5是否为空
+        
+        if x['收盘'] is not None and x['MA5'] is not None and x['收盘'] >= x['MA5']:
+            consecutive_days += 1
+            if consecutive_days >= 2:
+                return True
+        else:
+            consecutive_days = 0
+    return False
+    
