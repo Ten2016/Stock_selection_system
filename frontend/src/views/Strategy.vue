@@ -19,8 +19,20 @@
           </el-select>
         </el-form-item>
         <el-form-item label="总市值大于">
-          <el-input-number v-model="form.minMarketCap" :min="0" placeholder="不填则不限制" style="width: 200px;" />
+          <el-input-number v-model="form.minMarketCap" :min="0" placeholder="不填则不限制" style="width: 150px;" />
           <span style="margin-left: 8px;">亿元</span>
+        </el-form-item>
+        <el-form-item label="最近">
+          <el-input-number v-model="form.xDays" :min="5" :max="100" style="width: 120px;" />
+          <span style="margin-left: 8px;">天内跌破布林下轨</span>
+        </el-form-item>
+        <el-form-item label="之后">
+          <el-input-number v-model="form.yDays" :min="3" :max="60" style="width: 120px;" />
+          <span style="margin-left: 8px;">天内</span>
+        </el-form-item>
+        <el-form-item label="连续">
+          <el-input-number v-model="form.zDays" :min="1" :max="10" style="width: 120px;" />
+          <span style="margin-left: 8px;">天站上 5 日均线</span>
         </el-form-item>
         <el-form-item>
           <el-button type="primary" :loading="loading" @click="runStrategy">
@@ -59,11 +71,8 @@
                 </el-tag>
               </div>
               <div style="margin-bottom: 8px;">
-                <el-tag size="small" type="success" style="margin-right: 4px;">
-                  {{ row.result.matching_dates[0] }}
-                </el-tag>
-                <el-tag size="small" type="success">
-                  {{ row.result.matching_dates[1] }}
+                <el-tag size="small" type="success" style="margin-right: 4px;" v-for="(date, idx) in row.result.matching_dates" :key="idx">
+                  {{ date }}
                 </el-tag>
               </div>
               <div style="font-size: 12px; color: #909399;">
@@ -98,7 +107,10 @@ const results = ref([])
 const totalCount = ref(0)
 const form = ref({
   strategy: '',
-  minMarketCap: null
+  minMarketCap: null,
+  xDays: 30,
+  yDays: 10,
+  zDays: 2
 })
 
 const selectedStrategy = computed(() => {
@@ -133,7 +145,13 @@ const runStrategy = async () => {
   loading.value = true
   hasRun.value = true
   try {
-    const res = await selectStocks(form.value.strategy, form.value.minMarketCap)
+    const res = await selectStocks(
+      form.value.strategy,
+      form.value.minMarketCap,
+      form.value.xDays,
+      form.value.yDays,
+      form.value.zDays
+    )
     console.log('策略结果:', res.data)
     results.value = res.data.selected_stocks
     totalCount.value = res.data.total_count

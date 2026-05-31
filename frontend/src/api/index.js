@@ -30,8 +30,8 @@ export const getStrategies = () => {
 }
 
 // 运行选股策略
-export const selectStocks = (strategyName, minMarketCap = null) => {
-  const params = { strategy_name: strategyName }
+export const selectStocks = (strategyName, minMarketCap = null, xDays = 30, yDays = 10, zDays = 2) => {
+  const params = { strategy_name: strategyName, x_days: xDays, y_days: yDays, z_days: zDays }
   if (minMarketCap !== null && minMarketCap !== '') {
     params.min_market_cap = minMarketCap
   }
