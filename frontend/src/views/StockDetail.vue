@@ -48,6 +48,13 @@ const loadKlineData = async () => {
   }
 }
 
+const toFixed = (num, digits = 2) => {
+  if (num == null) return '-'
+  const n = Number(num)
+  if (isNaN(n)) return '-'
+  return n.toFixed(digits)
+}
+
 const calcTDSequential = (data) => {
   const tdBuy = []
   const tdSell = []
@@ -159,16 +166,16 @@ const renderChart = (data) => {
         const d = data[idx]
         if (!d) return ''
         let result = `<div style="padding:5px;min-width:200px;"><strong>${date}</strong><br/>`
-        result += `<span style="color:#ef5350;">●</span> K线: 开 ${d.open.toFixed(2)} 收 ${d.close.toFixed(2)} 低 ${d.low.toFixed(2)} 高 ${d.high.toFixed(2)}<br/>`
-        if (d.ma5 != null) result += `<span style="color:#5470c6;">●</span> MA5: ${d.ma5.toFixed(2)}<br/>`
-        if (d.ma10 != null) result += `<span style="color:#91cc75;">●</span> MA10: ${d.ma10.toFixed(2)}<br/>`
-        if (d.ma20 != null) result += `<span style="color:#fac858;">●</span> MA20: ${d.ma20.toFixed(2)}<br/>`
-        if (d.ma30 != null) result += `<span style="color:#ee6666;">●</span> MA30: ${d.ma30.toFixed(2)}<br/>`
-        if (d.ma60 != null) result += `<span style="color:#73c0de;">●</span> MA60: ${d.ma60.toFixed(2)}<br/>`
-        if (d.ma120 != null) result += `<span style="color:#3ba272;">●</span> MA120: ${d.ma120.toFixed(2)}<br/>`
-        if (d.boll_upper != null) result += `<span style="color:#fc8452;">●</span> 布林上轨: ${d.boll_upper.toFixed(2)}<br/>`
-        if (d.boll_mid != null) result += `<span style="color:#9a60b4;">●</span> 布林中轨: ${d.boll_mid.toFixed(2)}<br/>`
-        if (d.boll_lower != null) result += `<span style="color:#ea7ccc;">●</span> 布林下轨: ${d.boll_lower.toFixed(2)}<br/>`
+        result += `<span style="color:#ef5350;">●</span> K线: 开 ${toFixed(d.open)} 收 ${toFixed(d.close)} 低 ${toFixed(d.low)} 高 ${toFixed(d.high)}<br/>`
+        if (d.ma5 != null) result += `<span style="color:#5470c6;">●</span> MA5: ${toFixed(d.ma5)}<br/>`
+        if (d.ma10 != null) result += `<span style="color:#91cc75;">●</span> MA10: ${toFixed(d.ma10)}<br/>`
+        if (d.ma20 != null) result += `<span style="color:#fac858;">●</span> MA20: ${toFixed(d.ma20)}<br/>`
+        if (d.ma30 != null) result += `<span style="color:#ee6666;">●</span> MA30: ${toFixed(d.ma30)}<br/>`
+        if (d.ma60 != null) result += `<span style="color:#73c0de;">●</span> MA60: ${toFixed(d.ma60)}<br/>`
+        if (d.ma120 != null) result += `<span style="color:#3ba272;">●</span> MA120: ${toFixed(d.ma120)}<br/>`
+        if (d.boll_upper != null) result += `<span style="color:#fc8452;">●</span> 布林上轨: ${toFixed(d.boll_upper)}<br/>`
+        if (d.boll_mid != null) result += `<span style="color:#9a60b4;">●</span> 布林中轨: ${toFixed(d.boll_mid)}<br/>`
+        if (d.boll_lower != null) result += `<span style="color:#ea7ccc;">●</span> 布林下轨: ${toFixed(d.boll_lower)}<br/>`
         result += `</div>`
         return result
       }
@@ -436,7 +443,7 @@ const renderChart = (data) => {
               coord: [visibleData[maxIdx].trade_date, maxVal],
               name: '最高价',
               label: {
-                formatter: '最高\n' + maxVal.toFixed(2),
+                formatter: '最高\n' + toFixed(maxVal),
                 fontSize: 10,
               },
               itemStyle: {
@@ -447,7 +454,7 @@ const renderChart = (data) => {
               coord: [visibleData[minIdx].trade_date, minVal],
               name: '最低价',
               label: {
-                formatter: '最低\n' + minVal.toFixed(2),
+                formatter: '最低\n' + toFixed(minVal),
                 fontSize: 10,
               },
               itemStyle: {
