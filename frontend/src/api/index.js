@@ -24,4 +24,18 @@ api.interceptors.response.use(
   }
 )
 
+// 获取策略列表
+export const getStrategies = () => {
+  return api.get('/strategies')
+}
+
+// 运行选股策略
+export const selectStocks = (strategyName, minMarketCap = null) => {
+  const params = { strategy_name: strategyName }
+  if (minMarketCap !== null && minMarketCap !== '') {
+    params.min_market_cap = minMarketCap
+  }
+  return api.post('/strategies/select', null, { params, timeout: 300000 })
+}
+
 export default api

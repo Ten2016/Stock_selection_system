@@ -1,9 +1,79 @@
 <template>
   <div>
     <el-page-header @back="goBack" :content="stockCode + ' - ' + stockName + ' K线图'" />
-    <el-card style="margin-top: 20px;">
-      <div ref="chartRef" style="height: 600px; width: 100%;"></div>
-    </el-card>
+    <div style="display: flex; margin-top: 20px;">
+      <el-card style="flex: 1; margin-right: 10px;">
+        <div ref="chartRef" style="height: 600px; width: 100%;"></div>
+      </el-card>
+      <el-card style="width: 280px;">
+        <div style="padding: 10px;">
+          <div v-if="strategyResult" style="margin-bottom: 15px; padding: 10px; background: #e6f7ff; border: 1px solid #91d5ff; border-radius: 4px;">
+            <h4 style="margin: 0 0 8px 0; font-size: 14px; color: #1890ff;">
+              🎯 {{ strategyResult.strategy }}
+            </h4>
+            <div v-if="strategyResult.breakdown_date" style="margin-bottom: 8px;">
+              <el-tag size="small" type="warning">
+                跌破：{{ strategyResult.breakdown_date }}
+              </el-tag>
+            </div>
+            <div v-if="strategyResult.matching_dates && strategyResult.matching_dates.length >= 2" style="margin-bottom: 8px;">
+              <el-tag size="small" type="success" style="margin-right: 4px;">
+                {{ strategyResult.matching_dates[0] }}
+              </el-tag>
+              <el-tag size="small" type="success">
+                {{ strategyResult.matching_dates[1] }}
+              </el-tag>
+            </div>
+            <div v-if="strategyResult.details" style="margin-top: 8px; font-size: 12px; color: #606266;">
+              <div>跌破日: 收{{ toFixed(strategyResult.breakdown_close) }} / 下轨{{ toFixed(strategyResult.boll_lower) }}</div>
+              <div style="margin-top: 4px;" v-if="strategyResult.details.day1_close">第一天: 收{{ toFixed(strategyResult.details.day1_close) }} / MA5{{ toFixed(strategyResult.details.day1_ma5) }}</div>
+              <div style="margin-top: 4px;" v-if="strategyResult.details.day2_close">第二天: 收{{ toFixed(strategyResult.details.day2_close) }} / MA5{{ toFixed(strategyResult.details.day2_ma5) }}</div>
+            </div>
+          </div>
+          <h4 style="margin: 0 0 15px 0; font-size: 16px;">{{ currentDate }}</h4>
+          <div v-if="currentData">
+            <div style="margin-bottom: 8px;">
+              <span style="color:#ef5350;">●</span> 开盘: {{ toFixed(currentData.open) }}
+            </div>
+            <div style="margin-bottom: 8px;">
+              <span style="color:#ef5350;">●</span> 收盘: {{ toFixed(currentData.close) }}
+            </div>
+            <div style="margin-bottom: 8px;">
+              <span style="color:#ef5350;">●</span> 最高: {{ toFixed(currentData.high) }}
+            </div>
+            <div style="margin-bottom: 8px;">
+              <span style="color:#ef5350;">●</span> 最低: {{ toFixed(currentData.low) }}
+            </div>
+            <div style="margin-top: 12px; padding-top: 8px; border-top: 1px solid #eee;"></div>
+            <div v-if="currentData.ma5 != null" style="margin-bottom: 8px;">
+              <span style="color:#000;">●</span> MA5: {{ toFixed(currentData.ma5) }}
+            </div>
+            <div v-if="currentData.ma10 != null" style="margin-bottom: 8px;">
+              <span style="color:#91cc75;">●</span> MA10: {{ toFixed(currentData.ma10) }}
+            </div>
+            <div v-if="currentData.ma30 != null" style="margin-bottom: 8px;">
+              <span style="color:#ee6666;">●</span> MA30: {{ toFixed(currentData.ma30) }}
+            </div>
+            <div v-if="currentData.ma60 != null" style="margin-bottom: 8px;">
+              <span style="color:#ff6b6b;">●</span> MA60: {{ toFixed(currentData.ma60) }}
+            </div>
+            <div v-if="currentData.ma120 != null" style="margin-bottom: 8px;">
+              <span style="color:#3ba272;">●</span> MA120: {{ toFixed(currentData.ma120) }}
+            </div>
+            <div style="margin-top: 12px; padding-top: 8px; border-top: 1px solid #eee;"></div>
+            <div v-if="currentData.boll_upper != null" style="margin-bottom: 8px;">
+              <span style="color:#fc8452;">●</span> 布林上轨: {{ toFixed(currentData.boll_upper) }}
+            </div>
+            <div v-if="currentData.boll_mid != null" style="margin-bottom: 8px;">
+              <span style="color:#9a60b4;">●</span> 布林中轨: {{ toFixed(currentData.boll_mid) }}
+            </div>
+            <div v-if="currentData.boll_lower != null" style="margin-bottom: 8px;">
+              <span style="color:#ea7ccc;">●</span> 布林下轨: {{ toFixed(currentData.boll_lower) }}
+            </div>
+          </div>
+        </div>
+      </el-card>
+    </div>
   </div>
 </template>
 
@@ -18,6 +88,9 @@ const route = useRoute()
 const chartRef = ref(null)
 const stockCode = route.params.code
 const stockName = ref('')
+const currentDate = ref('')
+const currentData = ref(null)
+const strategyResult = ref(null)
 let chart = null
 let allData = []
 
@@ -119,10 +192,70 @@ const renderChart = (data) => {
   const bollLower = data.map(item => item.boll_lower)
 
   const { tdBuy, tdSell } = calcTDSequential(data)
+  
+  const strategyMarkPoints = []
+  if (strategyResult.value) {
+    // 添加跌破点
+    if (strategyResult.value.breakdown_date) {
+      const item = data.find(d => d.trade_date === strategyResult.value.breakdown_date)
+      if (item) {
+        strategyMarkPoints.push({
+          coord: [strategyResult.value.breakdown_date, item.low],
+          name: '跌破布林下轨',
+          label: {
+            show: true,
+            formatter: '跌破',
+            position: 'bottom',
+            fontSize: 14,
+            color: '#faad14',
+            fontWeight: 'bold',
+            backgroundColor: '#fffbe6',
+            padding: [4, 8],
+            borderRadius: 4,
+          },
+          itemStyle: {
+            color: '#faad14',
+          }
+        })
+      }
+    }
+    
+    // 添加站上5日线的点
+    if (strategyResult.value.matching_dates && Array.isArray(strategyResult.value.matching_dates)) {
+      strategyResult.value.matching_dates.forEach((date, idx) => {
+        const item = data.find(d => d.trade_date === date)
+        if (item) {
+          strategyMarkPoints.push({
+            coord: [date, item.high],
+            name: '站上5日线',
+            label: {
+              show: true,
+              formatter: `站上${idx + 1}`,
+              position: 'top',
+              fontSize: 14,
+              color: '#52c41a',
+              fontWeight: 'bold',
+              backgroundColor: '#f6ffed',
+              padding: [4, 8],
+              borderRadius: 4,
+            },
+            itemStyle: {
+              color: '#52c41a',
+            }
+          })
+        }
+      })
+    }
+  }
 
   chart = echarts.init(chartRef.value)
 
   const option = {
+    animation: true,
+    animationDuration: 300,
+    animationDurationUpdate: 300,
+    animationEasing: 'cubicOut',
+    animationEasingUpdate: 'cubicOut',
     title: {
       text: stockCode + ' ' + stockName.value + ' K线图',
     },
@@ -134,59 +267,17 @@ const renderChart = (data) => {
           color: '#999'
         }
       },
-      confine: true,
-      position: function(point, params, dom, rect, size) {
-        const tooltipWidth = 260
-        const chartWidth = size.viewSize[0]
-        const chartHeight = size.viewSize[1]
-        const mouseX = point[0]
-        const mouseY = point[1]
-
-        let x
-        if (mouseX > chartWidth / 2) {
-          x = mouseX - tooltipWidth - 10
-        } else {
-          x = mouseX + 10
-        }
-
-        let y = mouseY - 30
-        if (y + 300 > chartHeight) {
-          y = chartHeight - 310
-        }
-        if (y < 10) {
-          y = 10
-        }
-
-        return [x, y]
-      },
-      formatter: function(params) {
-        if (!params || params.length === 0) return ''
-        const date = params[0].axisValue
-        const idx = dates.indexOf(date)
-        const d = data[idx]
-        if (!d) return ''
-        let result = `<div style="padding:5px;min-width:200px;"><strong>${date}</strong><br/>`
-        result += `<span style="color:#ef5350;">●</span> K线: 开 ${toFixed(d.open)} 收 ${toFixed(d.close)} 低 ${toFixed(d.low)} 高 ${toFixed(d.high)}<br/>`
-        if (d.ma5 != null) result += `<span style="color:#5470c6;">●</span> MA5: ${toFixed(d.ma5)}<br/>`
-        if (d.ma10 != null) result += `<span style="color:#91cc75;">●</span> MA10: ${toFixed(d.ma10)}<br/>`
-        if (d.ma20 != null) result += `<span style="color:#fac858;">●</span> MA20: ${toFixed(d.ma20)}<br/>`
-        if (d.ma30 != null) result += `<span style="color:#ee6666;">●</span> MA30: ${toFixed(d.ma30)}<br/>`
-        if (d.ma60 != null) result += `<span style="color:#73c0de;">●</span> MA60: ${toFixed(d.ma60)}<br/>`
-        if (d.ma120 != null) result += `<span style="color:#3ba272;">●</span> MA120: ${toFixed(d.ma120)}<br/>`
-        if (d.boll_upper != null) result += `<span style="color:#fc8452;">●</span> 布林上轨: ${toFixed(d.boll_upper)}<br/>`
-        if (d.boll_mid != null) result += `<span style="color:#9a60b4;">●</span> 布林中轨: ${toFixed(d.boll_mid)}<br/>`
-        if (d.boll_lower != null) result += `<span style="color:#ea7ccc;">●</span> 布林下轨: ${toFixed(d.boll_lower)}<br/>`
-        result += `</div>`
-        return result
-      }
+      show: false
     },
     legend: {
-      data: ['K线', 'MA5', 'MA10', 'MA20', 'MA30', 'MA60', 'MA120', '布林上轨', '布林中轨', '布林下轨'],
+      data: ['K线', 'MA5', 'MA10', 'MA30', 'MA60', 'MA120', '布林上轨', '布林中轨', '布林下轨'],
     },
     grid: {
-      left: '10%',
-      right: '10%',
-      bottom: '15%',
+      left: '80',
+      right: '60',
+      bottom: '60',
+      top: '60',
+      containLabel: true,
     },
     xAxis: {
       type: 'category',
@@ -203,17 +294,19 @@ const renderChart = (data) => {
         show: true,
       },
     },
+
     dataZoom: [
       {
         type: 'inside',
-        start: 50,
+        start: 0,
         end: 100,
       },
       {
-        start: 50,
-        end: 100,
+        type: 'slider',
+        show: false,
       },
     ],
+
     series: [
       {
         name: 'K线',
@@ -248,7 +341,8 @@ const renderChart = (data) => {
               itemStyle: {
                 color: '#26a69a',
               }
-            }
+            },
+            ...strategyMarkPoints
           ]
         }
       },
@@ -258,9 +352,15 @@ const renderChart = (data) => {
         data: ma5,
         smooth: true,
         symbol: 'none',
+        animation: true,
+        animationDuration: 300,
+        animationDurationUpdate: 300,
+        animationEasing: 'cubicOut',
+        animationEasingUpdate: 'cubicOut',
         lineStyle: {
-          width: 1,
-          opacity: 0.8,
+          width: 3,
+          color: '#000',
+          opacity: 1,
         },
       },
       {
@@ -274,17 +374,7 @@ const renderChart = (data) => {
           opacity: 0.8,
         },
       },
-      {
-        name: 'MA20',
-        type: 'line',
-        data: ma20,
-        smooth: true,
-        symbol: 'none',
-        lineStyle: {
-          width: 1,
-          opacity: 0.8,
-        },
-      },
+
       {
         name: 'MA30',
         type: 'line',
@@ -302,9 +392,15 @@ const renderChart = (data) => {
         data: ma60,
         smooth: true,
         symbol: 'none',
+        animation: true,
+        animationDuration: 300,
+        animationDurationUpdate: 300,
+        animationEasing: 'cubicOut',
+        animationEasingUpdate: 'cubicOut',
         lineStyle: {
-          width: 1,
-          opacity: 0.8,
+          width: 2,
+          color: '#ff6b6b',
+          opacity: 1,
         },
       },
       {
@@ -406,7 +502,27 @@ const renderChart = (data) => {
     ],
   }
 
-  chart.setOption(option)
+  chart.setOption(option, true)
+
+  if (data.length > 0) {
+    const latestData = data[data.length - 1]
+    currentDate.value = latestData.trade_date
+    currentData.value = latestData
+  }
+
+  chart.getZr().on('mousemove', (event) => {
+    const pointInPixel = [event.offsetX, event.offsetY]
+    const pointInGrid = chart.convertFromPixel('grid', pointInPixel)
+    
+    if (pointInGrid && pointInGrid[0] != null) {
+      const idx = Math.round(pointInGrid[0])
+      if (idx >= 0 && idx < data.length) {
+        const d = data[idx]
+        currentDate.value = d.trade_date
+        currentData.value = d
+      }
+    }
+  })
 
   chart.on('dataZoom', () => {
     if (!chart) return
@@ -474,6 +590,13 @@ const handleResize = () => {
 
 onMounted(async () => {
   await nextTick()
+  if (route.query.strategyResult) {
+    try {
+      strategyResult.value = JSON.parse(route.query.strategyResult)
+    } catch (e) {
+      console.error(e)
+    }
+  }
   await loadStockInfo()
   await loadKlineData()
   window.addEventListener('resize', handleResize)
