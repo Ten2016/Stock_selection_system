@@ -7,6 +7,7 @@
           <div>
             <el-button type="primary" @click="startSync" :disabled="syncing">开始同步</el-button>
             <el-button type="success" @click="startSyncRecentDays" :disabled="syncing">同步近10天</el-button>
+            <el-button type="warning" @click="startSyncBasicInfo" :disabled="syncing">同步基本信息</el-button>
             <el-button type="danger" @click="cancelSync" :disabled="!syncing">取消同步</el-button>
           </div>
         </div>
@@ -51,7 +52,7 @@
           <el-descriptions-item label="成功">
             <el-tag type="success">{{ realtimeProgress.success_count || 0 }}</el-tag>
           </el-descriptions-item>
-          <el-descriptions-item label="跳过（已有数据）">
+          <el-descriptions-item label="跳过（在跳过列表中）">
             <el-tag type="info">{{ realtimeProgress.skipped_count || 0 }}</el-tag>
           </el-descriptions-item>
           <el-descriptions-item label="失败">
@@ -74,8 +75,8 @@
           <el-descriptions-item label="失败">
             <el-tag type="danger">{{ syncStatus.failed_count || 0 }}</el-tag>
           </el-descriptions-item>
-          <el-descriptions-item label="未获取到数据">
-            <el-tag type="warning">{{ syncStatus.no_data_count || 0 }}</el-tag>
+          <el-descriptions-item label="跳过（在跳过列表中）">
+            <el-tag type="info">{{ syncStatus.skipped_count || 0 }}</el-tag>
           </el-descriptions-item>
         </el-descriptions>
       </div>
@@ -144,7 +145,7 @@
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import api from '../api'
+import api, { syncBasicInfo } from '../api'
 
 const syncing = ref(false)
 const syncStatus = ref(null)
@@ -220,6 +221,18 @@ const startSync = async () => {
 const startSyncRecentDays = async () => {
   try {
     const res = await api.post('/sync/start-recent-days')
+    ElMessage.success(res.msg)
+    syncing.value = true
+    realtimeProgress.value = null
+    startPolling()
+  } catch (error) {
+    console.error(error)
+  }
+}
+
+const startSyncBasicInfo = async () => {
+  try {
+    const res = await syncBasicInfo()
     ElMessage.success(res.msg)
     syncing.value = true
     realtimeProgress.value = null

@@ -57,6 +57,9 @@
             <div style="margin-bottom: 8px;">
               <span style="color:#ef5350;">●</span> 收盘: {{ toFixed(currentData.close) }}
             </div>
+            <div style="margin-bottom: 8px;" v-if="currentData.change_pct != null">
+              <span :style="{color: currentData.change_pct >= 0 ? '#ef5350' : '#26a69a'}">●</span> 涨跌幅: {{ toFixed(currentData.change_pct) }}%
+            </div>
             <div style="margin-bottom: 8px;">
               <span style="color:#ef5350;">●</span> 最高: {{ toFixed(currentData.high) }}
             </div>

@@ -8,9 +8,46 @@
     @close="handleClose"
   >
     <div style="display: flex;">
-      <el-card style="flex: 1; margin-right: 10px;">
-        <div ref="chartRef" style="height: 600px; width: 100%;"></div>
-      </el-card>
+      <div style="flex: 1; margin-right: 10px;">
+        <el-card style="margin-bottom: 10px;">
+          <div ref="chartRef" style="height: 600px; width: 100%;"></div>
+        </el-card>
+        <!-- 股票基本信息 -->
+        <el-card v-if="stockBasicInfo">
+          <template #header>
+            <span style="font-weight: bold;">{{ stockCode }} {{ stockName }} 基本信息</span>
+          </template>
+          <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px;">
+            <div>
+              <div style="color: #909399; font-size: 12px; margin-bottom: 4px;">总市值</div>
+              <div style="font-size: 16px; font-weight: bold;">{{ stockBasicInfo.total_cap ? stockBasicInfo.total_cap.toFixed(2) + ' 亿' : '-' }}</div>
+            </div>
+            <div>
+              <div style="color: #909399; font-size: 12px; margin-bottom: 4px;">动态市盈率 (TTM)</div>
+              <div style="font-size: 16px; font-weight: bold;">{{ stockBasicInfo.pe_ratio ? stockBasicInfo.pe_ratio.toFixed(2) : '-' }}</div>
+            </div>
+            <div>
+              <div style="color: #909399; font-size: 12px; margin-bottom: 4px;">静态市盈率</div>
+              <div style="font-size: 16px; font-weight: bold;">{{ stockBasicInfo.pe_ratio_static ? stockBasicInfo.pe_ratio_static.toFixed(2) : '-' }}</div>
+            </div>
+            <div>
+              <div style="color: #909399; font-size: 12px; margin-bottom: 4px;">市净率</div>
+              <div style="font-size: 16px; font-weight: bold;">{{ stockBasicInfo.pb_ratio ? stockBasicInfo.pb_ratio.toFixed(2) : '-' }}</div>
+            </div>
+            <div>
+              <div style="color: #909399; font-size: 12px; margin-bottom: 4px;">今年涨跌幅</div>
+              <div v-if="stockBasicInfo.ytd_change_pct != null" :style="{fontSize: '16px', fontWeight: 'bold', color: stockBasicInfo.ytd_change_pct >= 0 ? '#ef5350' : '#26a69a'}">
+                {{ stockBasicInfo.ytd_change_pct.toFixed(2) }}%
+              </div>
+              <div v-else style="font-size: 16px; font-weight: bold;">-</div>
+            </div>
+            <div>
+              <div style="color: #909399; font-size: 12px; margin-bottom: 4px;">行业</div>
+              <div style="font-size: 16px; font-weight: bold;">{{ stockBasicInfo.industry || '-' }}</div>
+            </div>
+          </div>
+        </el-card>
+      </div>
       <el-card style="width: 280px;">
         <div style="padding: 10px;">
           <div v-if="strategyResult" style="margin-bottom: 15px; padding: 10px; background: #e6f7ff; border: 1px solid #91d5ff; border-radius: 4px;">
@@ -62,6 +99,9 @@
             </div>
             <div style="margin-bottom: 8px;">
               <span style="color:#ef5350;">●</span> 收盘: {{ toFixed(currentData.close) }}
+            </div>
+            <div style="margin-bottom: 8px;" v-if="currentData.change_pct != null">
+              <span :style="{color: currentData.change_pct >= 0 ? '#ef5350' : '#26a69a'}">●</span> 涨跌幅: {{ toFixed(currentData.change_pct) }}%
             </div>
             <div style="margin-bottom: 8px;">
               <span style="color:#ef5350;">●</span> 最高: {{ toFixed(currentData.high) }}
@@ -126,6 +166,7 @@ const emit = defineEmits(['update:visible'])
 
 const chartRef = ref(null)
 const stockName = ref('')
+const stockBasicInfo = ref(null)
 const currentDate = ref('')
 const currentData = ref(null)
 let chart = null
@@ -645,6 +686,7 @@ const loadStockInfo = async () => {
     const res = await api.get(`/stocks/${props.stockCode}`)
     if (res.code === 0) {
       stockName.value = res.data.name || ''
+      stockBasicInfo.value = res.data
     }
   } catch (error) {
     console.error(error)
@@ -670,6 +712,7 @@ const handleClose = () => {
     chart = null
   }
   stockName.value = ''
+  stockBasicInfo.value = null
   currentDate.value = ''
   currentData.value = null
   allData = []

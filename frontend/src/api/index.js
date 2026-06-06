@@ -38,4 +38,14 @@ export const selectStocks = (strategyName, minMarketCap = null, xDays = 30, yDay
   return api.post('/strategies/select', null, { params, timeout: 300000 })
 }
 
+// 获取策略最新结果
+export const getLatestStrategyResult = (strategyName) => {
+  return api.get('/strategies/latest-result', { params: { strategy_name: strategyName } })
+}
+
+// 同步股票基本信息（市值、市盈率等）
+export const syncBasicInfo = () => {
+  return api.post('/sync/sync-basic-info')
+}
+
 export default api

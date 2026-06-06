@@ -14,6 +14,10 @@ class StockBasic(Base):
     total_cap = Column(DECIMAL(20, 2))
     industry = Column(String(50))
     list_date = Column(Date)
+    pe_ratio = Column(DECIMAL(10, 2))  # 动态市盈率（TTM）
+    pe_ratio_static = Column(DECIMAL(10, 2))  # 静态市盈率
+    pb_ratio = Column(DECIMAL(10, 2))  # 市净率
+    ytd_change_pct = Column(DECIMAL(10, 2))  # 今年涨跌幅
     is_active = Column(Boolean, default=True)
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
@@ -27,6 +31,10 @@ class StockBasic(Base):
             "total_cap": float(self.total_cap) if self.total_cap else None,
             "industry": self.industry,
             "list_date": self.list_date.isoformat() if self.list_date else None,
+            "pe_ratio": float(self.pe_ratio) if self.pe_ratio else None,
+            "pe_ratio_static": float(self.pe_ratio_static) if self.pe_ratio_static else None,
+            "pb_ratio": float(self.pb_ratio) if self.pb_ratio else None,
+            "ytd_change_pct": float(self.ytd_change_pct) if self.ytd_change_pct else None,
             "is_active": self.is_active,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,

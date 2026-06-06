@@ -142,8 +142,8 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
-import { getStrategies, selectStocks } from '../api'
+import { ref, computed, onMounted, watch } from 'vue'
+import { getStrategies, selectStocks, getLatestStrategyResult } from '../api'
 import KlineChartDialog from '../components/KlineChartDialog.vue'
 
 const strategies = ref([])
@@ -174,12 +174,37 @@ const toFixed = (num, digits = 2) => {
   return n.toFixed(digits)
 }
 
+// 加载策略的最新结果
+const loadLatestResult = async (strategyName) => {
+  if (!strategyName) return
+  try {
+    const res = await getLatestStrategyResult(strategyName)
+    if (res.data && res.data.selected_stocks && res.data.selected_stocks.length > 0) {
+      results.value = res.data.selected_stocks
+      totalCount.value = res.data.total_count
+      hasRun.value = true
+      // 恢复参数
+      if (res.data.params) {
+        form.value.minMarketCap = res.data.params.min_market_cap
+        form.value.xDays = res.data.params.x_days || form.value.xDays
+        form.value.yDays = res.data.params.y_days || form.value.yDays
+        form.value.zDays = res.data.params.z_days || form.value.zDays
+        form.value.yPct = res.data.params.y_pct || form.value.yPct
+      }
+    }
+  } catch (error) {
+    console.error('加载最新结果失败:', error)
+  }
+}
+
 onMounted(async () => {
   try {
     const res = await getStrategies()
     strategies.value = res.data
     if (strategies.value.length > 0) {
       form.value.strategy = strategies.value[0].name
+      // 加载默认策略的最新结果
+      await loadLatestResult(form.value.strategy)
     }
   } catch (error) {
     console.error(error)
@@ -197,6 +222,11 @@ const onStrategyChange = () => {
     form.value.yPct = 5.0
     form.value.zDays = 3
   }
+  // 加载新策略的最新结果
+  results.value = []
+  totalCount.value = 0
+  hasRun.value = false
+  loadLatestResult(form.value.strategy)
 }
 
 const runStrategy = async () => {

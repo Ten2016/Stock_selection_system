@@ -33,19 +33,37 @@
             {{ (currentPage - 1) * pageSize + $index + 1 }}
           </template>
         </el-table-column>
-        <el-table-column prop="code" label="代码" width="120" />
-        <el-table-column prop="name" label="名称" width="150" />
-        <el-table-column prop="market" label="市场" width="100">
-          <template #default="{ row }">
-            {{ row.market === 'SSE' ? '上交所' : '深交所' }}
-          </template>
-        </el-table-column>
-        <el-table-column prop="total_cap" label="市值(亿)" width="120">
+        <el-table-column prop="code" label="代码" width="100" />
+        <el-table-column prop="name" label="名称" width="120" />
+        <el-table-column prop="total_cap" label="总市值(亿)" width="110">
           <template #default="{ row }">
             {{ row.total_cap ? row.total_cap.toFixed(2) : '-' }}
           </template>
         </el-table-column>
-        <el-table-column label="K线数据" width="200">
+        <el-table-column prop="pe_ratio" label="动态市盈率" width="110">
+          <template #default="{ row }">
+            {{ row.pe_ratio ? row.pe_ratio.toFixed(2) : '-' }}
+          </template>
+        </el-table-column>
+        <el-table-column prop="pe_ratio_static" label="静态市盈率" width="110">
+          <template #default="{ row }">
+            {{ row.pe_ratio_static ? row.pe_ratio_static.toFixed(2) : '-' }}
+          </template>
+        </el-table-column>
+        <el-table-column prop="pb_ratio" label="市净率" width="100">
+          <template #default="{ row }">
+            {{ row.pb_ratio ? row.pb_ratio.toFixed(2) : '-' }}
+          </template>
+        </el-table-column>
+        <el-table-column prop="ytd_change_pct" label="今年涨跌幅" width="110">
+          <template #default="{ row }">
+            <span v-if="row.ytd_change_pct != null" :style="{color: row.ytd_change_pct >= 0 ? '#ef5350' : '#26a69a'}">
+              {{ row.ytd_change_pct.toFixed(2) }}%
+            </span>
+            <span v-else>-</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="K线数据" width="180">
           <template #default="{ row }">
             <span v-if="row.kline_date_range">
               {{ row.kline_date_range.min_date }} ~ {{ row.kline_date_range.max_date }}
@@ -55,17 +73,9 @@
             <span v-else style="color: #999;">无数据</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="200">
+        <el-table-column label="操作" width="100" fixed="right">
           <template #default="{ row }">
-            <el-button size="small" @click="viewStock(row.code)">详情</el-button>
-            <el-popconfirm
-              title="确定要清空该股票的K线数据吗？"
-              @confirm="clearStockKline(row.code)"
-            >
-              <template #reference>
-                <el-button size="small" type="danger" :loading="clearingCode === row.code">清空</el-button>
-              </template>
-            </el-popconfirm>
+            <el-button size="small" @click="viewStock(row)">详情</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -81,16 +91,22 @@
         />
       </div>
     </el-card>
+
+    <!-- K线图弹窗 -->
+    <KlineChartDialog
+      v-model:visible="chartDialogVisible"
+      :stock-code="selectedStockCode"
+      :strategy-result="null"
+    />
   </div>
 </template>
 
 <script setup>
 import { ref, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import api from '../api'
+import KlineChartDialog from '../components/KlineChartDialog.vue'
 
-const router = useRouter()
 const stocks = ref([])
 const total = ref(0)
 const currentPage = ref(1)
@@ -98,6 +114,8 @@ const pageSize = ref(50)
 const searchKeyword = ref('')
 const clearingCode = ref('')
 const clearingAll = ref(false)
+const chartDialogVisible = ref(false)
+const selectedStockCode = ref('')
 
 const loadStocks = async () => {
   try {
@@ -126,8 +144,9 @@ const handlePageChange = (page) => {
   loadStocks()
 }
 
-const viewStock = (code) => {
-  router.push(`/stock/${code}`)
+const viewStock = (row) => {
+  selectedStockCode.value = row.code
+  chartDialogVisible.value = true
 }
 
 const clearStockKline = async (code) => {

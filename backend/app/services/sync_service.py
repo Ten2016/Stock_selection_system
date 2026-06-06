@@ -84,6 +84,9 @@ def fetch_all_stocks_basic_info():
                             continue
                         
                         market_cap_yi = float(parts[45]) if len(parts) > 45 and parts[45] else 0
+                        pe_ratio = float(parts[39]) if len(parts) > 39 and parts[39] else None
+                        pb_ratio = float(parts[46]) if len(parts) > 46 and parts[46] else None
+                        ytd_change_pct = float(parts[32]) if len(parts) > 32 and parts[32] else None
                         
                         if market_cap_yi > 0:
                             all_stocks.append({
@@ -91,6 +94,9 @@ def fetch_all_stocks_basic_info():
                                 '名称': name,
                                 '总市值': int(market_cap_yi),
                                 '流通市值': int(market_cap_yi * 0.8),
+                                '市盈率': pe_ratio,
+                                '市净率': pb_ratio,
+                                '今年涨跌幅': ytd_change_pct,
                             })
                     except:
                         continue
@@ -128,50 +134,32 @@ def fetch_all_stocks_basic_info():
 def save_stocks_basic_info(df):
     with SessionLocal() as db:
         for _, row in df.iterrows():
-            stock = StockBasic(
-                code=row['代码'],
-                name=row['名称'],
-                market='SSE' if row['代码'].startswith('6') else 'SZSE',
-                total_cap=float(row['总市值']),
-            )
             existing = db.query(StockBasic).filter(StockBasic.code == row['代码']).first()
             if existing:
                 existing.name = row['名称']
                 existing.total_cap = float(row['总市值'])
+                existing.pe_ratio = float(row['市盈率']) if row.get('市盈率') else None
+                existing.pb_ratio = float(row['市净率']) if row.get('市净率') else None
+                existing.ytd_change_pct = float(row['今年涨跌幅']) if row.get('今年涨跌幅') else None
             else:
+                stock = StockBasic(
+                    code=row['代码'],
+                    name=row['名称'],
+                    market='SSE' if row['代码'].startswith('6') else 'SZSE',
+                    total_cap=float(row['总市值']),
+                    pe_ratio=float(row['市盈率']) if row.get('市盈率') else None,
+                    pb_ratio=float(row['市净率']) if row.get('市净率') else None,
+                    ytd_change_pct=float(row['今年涨跌幅']) if row.get('今年涨跌幅') else None,
+                )
                 db.add(stock)
         db.commit()
 
 
-def get_existing_dates(db, stock_code: str) -> set:
-    dates = db.query(StockKline.trade_date).filter(StockKline.stock_code == stock_code).all()
-    return set(d[0] for d in dates)
-
-
-def should_skip_stock(db, stock_code: str, start_date: str, end_date: str) -> tuple[bool, str]:
-    from sqlalchemy import func
-    result = db.query(
-        func.min(StockKline.trade_date).label('min_date'),
-        func.max(StockKline.trade_date).label('max_date'),
-        func.count(StockKline.id).label('count')
-    ).filter(StockKline.stock_code == stock_code).first()
-    
-    if not result or result.count == 0:
-        return False, "no data"
-    
-    start = datetime.strptime(start_date, '%Y-%m-%d').date()
-    end = datetime.strptime(end_date, '%Y-%m-%d').date()
-    
-    if result.min_date <= end and result.max_date >= start:
-        return True, f"data exists ({result.min_date} to {result.max_date}, {result.count} records)"
-    
-    return False, f"partial data ({result.min_date} to {result.max_date}, {result.count} records)"
-
-
-def fetch_one_stock_history_with_db(stock_code: str, start_date: str, end_date: str, existing_dates: set):
+def fetch_one_stock_history(stock_code: str, start_date: str, end_date: str):
+    """获取股票历史K线数据（不检查数据库，直接获取全量数据）"""
     from app.api.sync import sync_status
     
-    print(f"[INFO] Fetching history for {stock_code} from {start_date} to {end_date}, existing dates: {len(existing_dates)}")
+    print(f"[INFO] Fetching history for {stock_code} from {start_date} to {end_date}")
     
     max_retries = 3
     retry_count = 0
@@ -239,15 +227,17 @@ def fetch_one_stock_history_with_db(stock_code: str, start_date: str, end_date: 
             
             df['dividend_info'] = df['trade_date'].apply(lambda d: dividend_map.get(str(d), None))
             
-            df = df[~df['trade_date'].isin(existing_dates)]
-            print(f"[INFO] {len(df)} new records after filtering existing dates")
+            df = df.sort_values('trade_date').reset_index(drop=True)
             
-            if not df.empty:
-                df['amplitude'] = ((df['high'] - df['low']) / df['close'].shift(1)) * 100
-                df['change_pct'] = ((df['close'] - df['close'].shift(1)) / df['close'].shift(1)) * 100
-                df['turnover_rate'] = df['volume'] / 10000
-                
-                df = calculate_all_indicators(df)
+            # 计算指标
+            df['change_pct'] = ((df['close'] - df['close'].shift(1)) / df['close'].shift(1)) * 100
+            df['change_pct'] = df['change_pct'].round(2)
+            df['change_pct'] = df['change_pct'].where(df['change_pct'].notna(), None)
+            df = calculate_all_indicators(df)
+            
+            # 计算其他基础指标
+            df['amplitude'] = ((df['high'] - df['low']) / df['close'].shift(1)) * 100
+            df['turnover_rate'] = df['volume'] / 10000
             
             return df
             
@@ -383,3 +373,29 @@ def create_sync_record(sync_date: str, stock_count: int, success_count: int = 0,
             )
             db.add(record)
         db.commit()
+
+
+def run_basic_info_sync():
+    """只同步股票基本信息（市值、市盈率等），不同步K线，获取所有股票不跳过"""
+    print("=" * 50)
+    print("[START] Starting basic info sync task")
+    print("=" * 50)
+    
+    try:
+        # 获取所有股票基本信息
+        df = fetch_all_stocks_basic_info()
+        
+        if df is None or len(df) == 0:
+            print("[ERROR] Failed to fetch stock basic info")
+            return
+        
+        print(f"[INFO] Fetched {len(df)} stocks basic info")
+        
+        # 保存到数据库（不跳过任何股票）
+        save_stocks_basic_info(df)
+        print(f"[DONE] Basic info sync completed, saved {len(df)} stocks")
+        
+    except Exception as e:
+        print(f"[FATAL ERROR] Basic info sync failed: {e}")
+        import traceback
+        traceback.print_exc()
