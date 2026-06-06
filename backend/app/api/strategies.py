@@ -2,11 +2,23 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from typing import Optional
 from datetime import date
+from decimal import Decimal
 
 from app.utils.database import get_db
-from app.utils.response import success
+from app.utils.response import success, error
 from app.services import strategy_service
 from app.models.strategy_result import StrategyResult
+
+
+def convert_decimals(obj):
+    """递归将 Decimal 转为 float"""
+    if isinstance(obj, Decimal):
+        return float(obj)
+    elif isinstance(obj, dict):
+        return {k: convert_decimals(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_decimals(item) for item in obj]
+    return obj
 
 router = APIRouter()
 
@@ -84,7 +96,7 @@ async def select_stocks(
             run_date=date.today(),
             params=params,
             total_count=len(results),
-            results=results,
+            results=convert_decimals(results),
         )
         db.add(new_result)
         db.commit()

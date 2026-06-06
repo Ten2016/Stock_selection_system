@@ -223,21 +223,57 @@ def fetch_one_stock_history(stock_code: str, start_date: str, end_date: str):
             df['low'] = pd.to_numeric(df['low'], errors='coerce')
             df['volume'] = pd.to_numeric(df['volume'], errors='coerce')
             
-            df['amount'] = df['volume'] * df['close']
+            df['amount'] = df['volume'] * df['close'] / 100
             
             df['dividend_info'] = df['trade_date'].apply(lambda d: dividend_map.get(str(d), None))
             
             df = df.sort_values('trade_date').reset_index(drop=True)
             
-            # 计算指标
-            df['change_pct'] = ((df['close'] - df['close'].shift(1)) / df['close'].shift(1)) * 100
-            df['change_pct'] = df['change_pct'].round(2)
-            df['change_pct'] = df['change_pct'].where(df['change_pct'].notna(), None)
-            df = calculate_all_indicators(df)
-            
-            # 计算其他基础指标
-            df['amplitude'] = ((df['high'] - df['low']) / df['close'].shift(1)) * 100
-            df['turnover_rate'] = df['volume'] / 10000
+            # 从数据库加载历史数据作为指标计算上下文
+            db = SessionLocal()
+            try:
+                # 计算需要加载的历史起始日期（同步起始日前120天）
+                sync_start_date = df['trade_date'].min()
+                history_start_date = sync_start_date - timedelta(days=120)
+                
+                history_klines = db.query(StockKline).filter(
+                    StockKline.stock_code == stock_code,
+                    StockKline.trade_date >= history_start_date,
+                    StockKline.trade_date < sync_start_date
+                ).order_by(StockKline.trade_date.asc()).all()
+                
+                if history_klines:
+                    # 构建历史数据 DataFrame（正序）
+                    history_df = pd.DataFrame([{
+                        'trade_date': k.trade_date,
+                        'close': k.close,
+                    } for k in reversed(history_klines)])
+                    history_df['trade_date'] = pd.to_datetime(history_df['trade_date'])
+                    
+                    # 合并历史数据和新数据
+                    combined_df = pd.concat([history_df[['trade_date', 'close']], df[['trade_date', 'close', 'open', 'high', 'low', 'volume', 'amount', 'dividend_info']]], ignore_index=True)
+                    
+                    # 计算指标
+                    combined_df['change_pct'] = ((combined_df['close'] - combined_df['close'].shift(1)) / combined_df['close'].shift(1)) * 100
+                    combined_df['change_pct'] = combined_df['change_pct'].round(2)
+                    combined_df['change_pct'] = combined_df['change_pct'].where(combined_df['change_pct'].notna(), None)
+                    combined_df = calculate_all_indicators(combined_df)
+                    
+                    # 计算振幅
+                    combined_df['amplitude'] = ((combined_df['high'] - combined_df['low']) / combined_df['close'].shift(1)) * 100
+                    
+                    # 只保留新数据的行
+                    new_dates = set(df['trade_date'])
+                    df = combined_df[combined_df['trade_date'].isin(new_dates)].reset_index(drop=True)
+                else:
+                    # 没有历史数据，直接计算
+                    df['change_pct'] = ((df['close'] - df['close'].shift(1)) / df['close'].shift(1)) * 100
+                    df['change_pct'] = df['change_pct'].round(2)
+                    df['change_pct'] = df['change_pct'].where(df['change_pct'].notna(), None)
+                    df = calculate_all_indicators(df)
+                    df['amplitude'] = ((df['high'] - df['low']) / df['close'].shift(1)) * 100
+            finally:
+                db.close()
             
             return df
             
@@ -275,7 +311,6 @@ def save_kline_data(db, stock_code: str, df) -> dict:
             amount=float(row['amount']) / 10000 if pd.notna(row.get('amount')) else None,
             amplitude=float(row['amplitude']) if pd.notna(row.get('amplitude')) else None,
             change_pct=float(row['change_pct']) if pd.notna(row.get('change_pct')) else None,
-            turnover_rate=float(row['turnover_rate']) if pd.notna(row.get('turnover_rate')) else None,
             ma5=float(row['MA5']) if pd.notna(row.get('MA5')) else None,
             ma10=float(row['MA10']) if pd.notna(row.get('MA10')) else None,
             ma20=float(row['MA20']) if pd.notna(row.get('MA20')) else None,
@@ -299,7 +334,6 @@ def save_kline_data(db, stock_code: str, df) -> dict:
             existing.amount = kline.amount
             existing.amplitude = kline.amplitude
             existing.change_pct = kline.change_pct
-            existing.turnover_rate = kline.turnover_rate
             existing.ma5 = kline.ma5
             existing.ma10 = kline.ma10
             existing.ma20 = kline.ma20

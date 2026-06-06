@@ -16,9 +16,11 @@ async def get_stocks(
     limit: int = 50,
     min_market_cap: Optional[float] = Query(None, description="Minimum market capitalization in hundred million yuan"),
     search: Optional[str] = Query(None, description="Search by stock code or name"),
+    sort_by: Optional[str] = Query(None, description="Sort field: total_cap, pe_ratio, pb_ratio, ytd_change_pct"),
+    sort_order: Optional[str] = Query("desc", description="Sort order: asc or desc"),
     db: Session = Depends(get_db)
 ):
-    stocks, total = stock_service.get_stock_list(db, skip=skip, limit=limit, min_market_cap=min_market_cap, search=search)
+    stocks, total = stock_service.get_stock_list(db, skip=skip, limit=limit, min_market_cap=min_market_cap, search=search, sort_by=sort_by, sort_order=sort_order)
     
     result = []
     for stock in stocks:

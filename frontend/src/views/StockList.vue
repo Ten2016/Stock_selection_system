@@ -27,7 +27,7 @@
           </div>
         </div>
       </template>
-      <el-table :data="stocks" style="width: 100%">
+      <el-table :data="stocks" style="width: 100%" @sort-change="handleSortChange" :default-sort="{prop: 'total_cap', order: 'descending'}">
         <el-table-column label="序号" width="60">
           <template #default="{ $index }">
             {{ (currentPage - 1) * pageSize + $index + 1 }}
@@ -35,12 +35,12 @@
         </el-table-column>
         <el-table-column prop="code" label="代码" width="100" />
         <el-table-column prop="name" label="名称" width="120" />
-        <el-table-column prop="total_cap" label="总市值(亿)" width="110">
+        <el-table-column prop="total_cap" label="总市值(亿)" width="110" sortable="custom">
           <template #default="{ row }">
             {{ row.total_cap ? row.total_cap.toFixed(2) : '-' }}
           </template>
         </el-table-column>
-        <el-table-column prop="pe_ratio" label="动态市盈率" width="110">
+        <el-table-column prop="pe_ratio" label="动态市盈率" width="110" sortable="custom">
           <template #default="{ row }">
             {{ row.pe_ratio ? row.pe_ratio.toFixed(2) : '-' }}
           </template>
@@ -50,12 +50,12 @@
             {{ row.pe_ratio_static ? row.pe_ratio_static.toFixed(2) : '-' }}
           </template>
         </el-table-column>
-        <el-table-column prop="pb_ratio" label="市净率" width="100">
+        <el-table-column prop="pb_ratio" label="市净率" width="100" sortable="custom">
           <template #default="{ row }">
             {{ row.pb_ratio ? row.pb_ratio.toFixed(2) : '-' }}
           </template>
         </el-table-column>
-        <el-table-column prop="ytd_change_pct" label="今年涨跌幅" width="110">
+        <el-table-column prop="ytd_change_pct" label="今年涨跌幅" width="110" sortable="custom">
           <template #default="{ row }">
             <span v-if="row.ytd_change_pct != null" :style="{color: row.ytd_change_pct >= 0 ? '#ef5350' : '#26a69a'}">
               {{ row.ytd_change_pct.toFixed(2) }}%
@@ -116,12 +116,16 @@ const clearingCode = ref('')
 const clearingAll = ref(false)
 const chartDialogVisible = ref(false)
 const selectedStockCode = ref('')
+const sortBy = ref('total_cap')
+const sortOrder = ref('desc')
 
 const loadStocks = async () => {
   try {
     const params = {
       skip: (currentPage.value - 1) * pageSize.value,
       limit: pageSize.value,
+      sort_by: sortBy.value,
+      sort_order: sortOrder.value,
     }
     if (searchKeyword.value) {
       params.search = searchKeyword.value
@@ -135,6 +139,19 @@ const loadStocks = async () => {
 }
 
 const handleSearch = () => {
+  currentPage.value = 1
+  loadStocks()
+}
+
+const handleSortChange = ({ prop, order }) => {
+  if (!prop || !order) {
+    // 取消排序时恢复默认排序
+    sortBy.value = 'total_cap'
+    sortOrder.value = 'desc'
+  } else {
+    sortBy.value = prop
+    sortOrder.value = order === 'ascending' ? 'asc' : 'desc'
+  }
   currentPage.value = 1
   loadStocks()
 }

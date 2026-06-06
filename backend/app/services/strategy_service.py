@@ -282,8 +282,8 @@ def run_strategy(
         if result:
             results.append(result)
         
-        # 每处理100个股票打印进度
-        if (idx + 1) % 100 == 0:
+        # 每处理100个股票打印进度，或处理完最后一个时打印
+        if (idx + 1) % 100 == 0 or idx + 1 == total_count:
             print(f"已处理 {idx + 1}/{total_count} 股票，找到 {len(results)} 个符合条件的")
     
     return results

@@ -7,7 +7,7 @@ from app.models.stock import StockBasic
 from app.models.stock_kline import StockKline
 
 
-def get_stock_list(db: Session, skip: int = 0, limit: int = 50, min_market_cap: Optional[float] = None, search: Optional[str] = None):
+def get_stock_list(db: Session, skip: int = 0, limit: int = 50, min_market_cap: Optional[float] = None, search: Optional[str] = None, sort_by: Optional[str] = None, sort_order: str = "desc"):
     query = db.query(StockBasic).filter(StockBasic.is_active == True)
     
     if min_market_cap is not None:
@@ -18,8 +18,23 @@ def get_stock_list(db: Session, skip: int = 0, limit: int = 50, min_market_cap: 
             (StockBasic.code.like(f'%{search}%')) | (StockBasic.name.like(f'%{search}%'))
         )
     
+    # 排序字段映射
+    sort_field_map = {
+        'total_cap': StockBasic.total_cap,
+        'pe_ratio': StockBasic.pe_ratio,
+        'pb_ratio': StockBasic.pb_ratio,
+        'ytd_change_pct': StockBasic.ytd_change_pct,
+    }
+    
+    # 默认排序：按总市值降序
+    order_field = sort_field_map.get(sort_by, StockBasic.total_cap)
+    if sort_order == 'asc':
+        query = query.order_by(order_field.asc())
+    else:
+        query = query.order_by(order_field.desc())
+    
     total = query.count()
-    stocks = query.order_by(StockBasic.total_cap.desc()).offset(skip).limit(limit).all()
+    stocks = query.offset(skip).limit(limit).all()
     
     return stocks, total
 
