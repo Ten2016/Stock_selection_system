@@ -15,14 +15,14 @@ def check_strategy_consecutive_ma5(
 ) -> Optional[dict]:
     """
     检查是否满足策略：
-    - 最近 x 天内跌破布林下轨
-    - 之后 y 天内连续 z 天站上 5 日均线
+    - 从当前日期开始，往前最多找x天，在这些天中，找到第一个满足收盘价跌破布林下轨的日期
+    - 然后从这天开始再往后找，在y天内找到连续有z天收盘价都站上5天均线的票
     从最新日期倒序找，找到第一个满足的即可
     
     :param data: 股票K线数据（按日期倒序排列）
-    :param x_days: 最近 x 天内跌破布林下轨
-    :param y_days: 之后 y 天内
-    :param z_days: 连续 z 天站上 5 日均线
+    :param x_days: 往前找x天
+    :param y_days: 往后找y天
+    :param z_days: 连续z天站上5日均线
     :return: 如果满足条件返回策略信息，否则返回None
     """
     if len(data) < max(x_days, y_days, z_days) + 10:
@@ -70,7 +70,7 @@ def check_strategy_consecutive_ma5(
                 
                 if all_above and len(matching_dates) == z_days:
                     # 构建结果
-                    strategy_name = (f'最近 {x_days} 天内跌破布林下轨，'
+                    strategy_name = (f'往前 {x_days} 天内跌破布林下轨，'
                                     f'之后 {y_days} 天内连续 {z_days} 天站上 5 日均线')
                     
                     result = {
@@ -159,9 +159,8 @@ def run_strategy(
     
     # 如果有最小市值筛选，添加条件
     if min_market_cap:
-        # 转换为万元（数据库单位是万元）
-        min_cap_wan = min_market_cap * 10000
-        query = query.filter(StockBasic.total_cap >= min_cap_wan)
+        # 数据库单位是亿元，直接比较
+        query = query.filter(StockBasic.total_cap >= min_market_cap)
     
     stocks = query.all()
     
@@ -192,7 +191,7 @@ def get_available_strategies() -> List[dict]:
     return [
         {
             'name': 'consecutive_ma5',
-            'display_name': '跌破布林下轨后连续两天站上5日线',
-            'description': '在跌破布林下轨后，10天内寻找连续两天收盘价站在5日线上方的股票'
+            'display_name': '跌破布林下轨后连续站上5日线',
+            'description': '从当前日期开始，往前最多找x天，找到第一个跌破布林下轨的日期，然后从这天开始再往后找，在y天内找到连续有z天收盘价都站上5天均线的票'
         }
     ]

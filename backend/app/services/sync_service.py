@@ -15,8 +15,8 @@ from app.services.indicator_service import calculate_all_indicators
 from sqlalchemy import and_
 
 
-REQUEST_DELAY_MIN = 0.3
-REQUEST_DELAY_MAX = 1.0
+REQUEST_DELAY_MIN = 0.1
+REQUEST_DELAY_MAX = 0.3
 
 
 def _get_stock_prefix(code: str) -> str:
@@ -97,7 +97,8 @@ def fetch_all_stocks_basic_info():
                 
                 if (i // batch_size) % 10 == 0:
                     print(f"[INFO] Fetched {i}/{len(all_codes)} codes, found {len(all_stocks)} stocks...")
-                    time.sleep(0.3)
+                    sleep_time = random.uniform(0.1, 0.3)
+                    time.sleep(sleep_time)
             
             if not all_stocks:
                 raise Exception("No stocks fetched")
@@ -181,15 +182,6 @@ def fetch_one_stock_history_with_db(stock_code: str, start_date: str, end_date: 
             return pd.DataFrame()
         
         try:
-            delay = random.uniform(REQUEST_DELAY_MIN, REQUEST_DELAY_MAX)
-            print(f"[ANTI-CRAWLER] Waiting {delay:.2f}s before requesting {stock_code}...")
-            
-            for _ in range(int(delay * 10)):
-                if sync_status.get("cancelled"):
-                    print(f"\n[WARN] Fetch cancelled for {stock_code}")
-                    return pd.DataFrame()
-                time.sleep(0.1)
-            
             prefix = _get_stock_prefix(stock_code)
             symbol = f"{prefix}{stock_code}"
             
