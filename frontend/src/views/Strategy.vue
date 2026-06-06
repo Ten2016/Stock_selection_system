@@ -9,7 +9,7 @@
       
       <el-form :inline="true" :model="form" style="margin-bottom: 20px;">
         <el-form-item label="选择策略">
-          <el-select v-model="form.strategy" placeholder="请选择策略" style="width: 300px;">
+          <el-select v-model="form.strategy" placeholder="请选择策略" style="width: 300px;" @change="onStrategyChange">
             <el-option
               v-for="strategy in strategies"
               :key="strategy.name"
@@ -22,18 +22,39 @@
           <el-input-number v-model="form.minMarketCap" :min="0" placeholder="不填则不限制" style="width: 150px;" />
           <span style="margin-left: 8px;">亿元</span>
         </el-form-item>
-        <el-form-item label="最近">
-          <el-input-number v-model="form.xDays" :min="5" :max="100" style="width: 120px;" />
-          <span style="margin-left: 8px;">天内跌破布林下轨</span>
-        </el-form-item>
-        <el-form-item label="之后">
-          <el-input-number v-model="form.yDays" :min="3" :max="60" style="width: 120px;" />
-          <span style="margin-left: 8px;">天内</span>
-        </el-form-item>
-        <el-form-item label="连续">
-          <el-input-number v-model="form.zDays" :min="1" :max="10" style="width: 120px;" />
-          <span style="margin-left: 8px;">天站上 5 日均线</span>
-        </el-form-item>
+        
+        <!-- consecutive_ma5 策略参数 -->
+        <template v-if="form.strategy === 'consecutive_ma5'">
+          <el-form-item label="最近">
+            <el-input-number v-model="form.xDays" :min="5" :max="100" style="width: 120px;" />
+            <span style="margin-left: 8px;">天内跌破布林下轨</span>
+          </el-form-item>
+          <el-form-item label="之后">
+            <el-input-number v-model="form.yDays" :min="3" :max="60" style="width: 120px;" />
+            <span style="margin-left: 8px;">天内</span>
+          </el-form-item>
+          <el-form-item label="连续">
+            <el-input-number v-model="form.zDays" :min="1" :max="10" style="width: 120px;" />
+            <span style="margin-left: 8px;">天站上 5 日均线</span>
+          </el-form-item>
+        </template>
+        
+        <!-- rise_then_fall 策略参数 -->
+        <template v-if="form.strategy === 'rise_then_fall'">
+          <el-form-item label="往前">
+            <el-input-number v-model="form.xDays" :min="5" :max="100" style="width: 120px;" />
+            <span style="margin-left: 8px;">天</span>
+          </el-form-item>
+          <el-form-item label="涨幅大于">
+            <el-input-number v-model="form.yPct" :min="0" :max="20" :step="0.5" style="width: 120px;" />
+            <span style="margin-left: 8px;">%</span>
+          </el-form-item>
+          <el-form-item label="连续">
+            <el-input-number v-model="form.zDays" :min="1" :max="10" style="width: 120px;" />
+            <span style="margin-left: 8px;">天下跌</span>
+          </el-form-item>
+        </template>
+        
         <el-form-item>
           <el-button type="primary" :loading="loading" @click="runStrategy">
             运行策略
@@ -63,7 +84,8 @@
           </template>
         </el-table-column>
         <el-table-column prop="result" label="策略详情" min-width="400">
-          <template #default="{ row }">
+          <!-- consecutive_ma5 策略结果 -->
+          <template #default="{ row }" v-if="form.strategy === 'consecutive_ma5'">
             <div v-if="row.result">
               <div style="margin-bottom: 8px;">
                 <el-tag size="small" type="warning">
@@ -72,6 +94,25 @@
               </div>
               <div style="margin-bottom: 8px;">
                 <el-tag size="small" type="success" style="margin-right: 4px;" v-for="(date, idx) in row.result.matching_dates" :key="idx">
+                  {{ date }}
+                </el-tag>
+              </div>
+              <div style="font-size: 12px; color: #909399;">
+                {{ row.result.strategy }}
+              </div>
+            </div>
+          </template>
+          
+          <!-- rise_then_fall 策略结果 -->
+          <template #default="{ row }" v-if="form.strategy === 'rise_then_fall'">
+            <div v-if="row.result">
+              <div style="margin-bottom: 8px;">
+                <el-tag size="small" type="danger">
+                  大涨：{{ row.result.rise_date }} ({{ row.result.rise_pct }}%)
+                </el-tag>
+              </div>
+              <div style="margin-bottom: 8px;">
+                <el-tag size="small" type="info" style="margin-right: 4px;" v-for="(date, idx) in row.result.falling_dates" :key="idx">
                   {{ date }}
                 </el-tag>
               </div>
@@ -90,27 +131,36 @@
     </el-card>
 
     <el-empty v-else-if="hasRun" description="没有符合条件的股票" />
+
+    <!-- K线图弹窗 -->
+    <KlineChartDialog
+      v-model:visible="chartDialogVisible"
+      :stock-code="selectedStockCode"
+      :strategy-result="selectedStockResult"
+    />
   </div>
 </template>
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
 import { getStrategies, selectStocks } from '../api'
-
-const router = useRouter()
+import KlineChartDialog from '../components/KlineChartDialog.vue'
 
 const strategies = ref([])
 const loading = ref(false)
 const hasRun = ref(false)
 const results = ref([])
 const totalCount = ref(0)
+const chartDialogVisible = ref(false)
+const selectedStockCode = ref('')
+const selectedStockResult = ref(null)
 const form = ref({
   strategy: '',
   minMarketCap: null,
   xDays: 30,
   yDays: 10,
-  zDays: 2
+  zDays: 2,
+  yPct: 5.0
 })
 
 const selectedStrategy = computed(() => {
@@ -136,6 +186,19 @@ onMounted(async () => {
   }
 })
 
+const onStrategyChange = () => {
+  // 切换策略时重置参数
+  if (form.value.strategy === 'consecutive_ma5') {
+    form.value.xDays = 30
+    form.value.yDays = 10
+    form.value.zDays = 2
+  } else if (form.value.strategy === 'rise_then_fall') {
+    form.value.xDays = 30
+    form.value.yPct = 5.0
+    form.value.zDays = 3
+  }
+}
+
 const runStrategy = async () => {
   if (!form.value.strategy) {
     alert('请选择策略')
@@ -150,7 +213,8 @@ const runStrategy = async () => {
       form.value.minMarketCap,
       form.value.xDays,
       form.value.yDays,
-      form.value.zDays
+      form.value.zDays,
+      form.value.yPct
     )
     console.log('策略结果:', res.data)
     results.value = res.data.selected_stocks
@@ -163,12 +227,9 @@ const runStrategy = async () => {
 }
 
 const viewStock = (row) => {
-  router.push({
-    path: `/stock/${row.code}`,
-    query: {
-      strategyResult: JSON.stringify(row.result)
-    }
-  })
+  selectedStockCode.value = row.code
+  selectedStockResult.value = row.result
+  chartDialogVisible.value = true
 }
 </script>
 

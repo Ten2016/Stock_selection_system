@@ -1,7 +1,13 @@
 <template>
-  <div>
-    <el-page-header @back="goBack" :content="stockCode + ' - ' + stockName + ' K线图'" />
-    <div style="display: flex; margin-top: 20px;">
+  <el-dialog
+    :model-value="visible"
+    @update:model-value="$emit('update:visible', $event)"
+    :title="stockCode + ' - ' + stockName + ' K线图'"
+    width="80%"
+    :close-on-click-modal="false"
+    @close="handleClose"
+  >
+    <div style="display: flex;">
       <el-card style="flex: 1; margin-right: 10px;">
         <div ref="chartRef" style="height: 600px; width: 100%;"></div>
       </el-card>
@@ -93,52 +99,37 @@
         </div>
       </el-card>
     </div>
-  </div>
+  </el-dialog>
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted, nextTick } from 'vue'
-import { useRouter, useRoute } from 'vue-router'
+import { ref, watch, nextTick, onUnmounted } from 'vue'
 import * as echarts from 'echarts'
 import api from '../api'
 
-const router = useRouter()
-const route = useRoute()
+const props = defineProps({
+  visible: {
+    type: Boolean,
+    default: false
+  },
+  stockCode: {
+    type: String,
+    default: ''
+  },
+  strategyResult: {
+    type: Object,
+    default: null
+  }
+})
+
+const emit = defineEmits(['update:visible'])
+
 const chartRef = ref(null)
-const stockCode = route.params.code
 const stockName = ref('')
 const currentDate = ref('')
 const currentData = ref(null)
-const strategyResult = ref(null)
 let chart = null
 let allData = []
-
-const goBack = () => {
-  router.back()
-}
-
-const loadStockInfo = async () => {
-  try {
-    const res = await api.get(`/stocks/${stockCode}`)
-    if (res.code === 0) {
-      stockName.value = res.data.name || ''
-    }
-  } catch (error) {
-    console.error(error)
-  }
-}
-
-const loadKlineData = async () => {
-  try {
-    const res = await api.get(`/stocks/${stockCode}/kline`)
-    if (res.code === 0 && res.data.klines && res.data.klines.length > 0) {
-      allData = res.data.klines
-      renderChart(allData)
-    }
-  } catch (error) {
-    console.error(error)
-  }
-}
 
 const toFixed = (num, digits = 2) => {
   if (num == null) return '-'
@@ -213,24 +204,23 @@ const renderChart = (data) => {
   const { tdBuy, tdSell } = calcTDSequential(data)
   
   const strategyMarkPoints = []
-  if (strategyResult.value) {
+  if (props.strategyResult) {
     // consecutive_ma5 策略：跌破布林下轨 + 站上5日线
-    if (strategyResult.value.breakdown_date) {
-      const item = data.find(d => d.trade_date === strategyResult.value.breakdown_date)
+    if (props.strategyResult.breakdown_date) {
+      const item = data.find(d => d.trade_date === props.strategyResult.breakdown_date)
       if (item) {
         strategyMarkPoints.push({
-          coord: [strategyResult.value.breakdown_date, item.low],
+          coord: [props.strategyResult.breakdown_date, item.low],
           name: '跌破布林下轨',
+          symbol: 'pin',
+          symbolSize: 20,
           label: {
             show: true,
             formatter: '跌破',
-            position: 'bottom',
-            fontSize: 14,
-            color: '#faad14',
+            position: 'inside',
+            fontSize: 10,
+            color: '#fff',
             fontWeight: 'bold',
-            backgroundColor: '#fffbe6',
-            padding: [4, 8],
-            borderRadius: 4,
           },
           itemStyle: {
             color: '#faad14',
@@ -239,23 +229,22 @@ const renderChart = (data) => {
       }
     }
     
-    if (strategyResult.value.matching_dates && Array.isArray(strategyResult.value.matching_dates)) {
-      strategyResult.value.matching_dates.forEach((date, idx) => {
+    if (props.strategyResult.matching_dates && Array.isArray(props.strategyResult.matching_dates)) {
+      props.strategyResult.matching_dates.forEach((date, idx) => {
         const item = data.find(d => d.trade_date === date)
         if (item) {
           strategyMarkPoints.push({
             coord: [date, item.high],
             name: '站上5日线',
+            symbol: 'pin',
+            symbolSize: 20,
             label: {
               show: true,
-              formatter: `站上${idx + 1}`,
-              position: 'top',
-              fontSize: 14,
-              color: '#52c41a',
+              formatter: `${idx + 1}`,
+              position: 'inside',
+              fontSize: 10,
+              color: '#fff',
               fontWeight: 'bold',
-              backgroundColor: '#f6ffed',
-              padding: [4, 8],
-              borderRadius: 4,
             },
             itemStyle: {
               color: '#52c41a',
@@ -266,22 +255,21 @@ const renderChart = (data) => {
     }
     
     // rise_then_fall 策略：大涨 + 连续下跌
-    if (strategyResult.value.rise_date) {
-      const item = data.find(d => d.trade_date === strategyResult.value.rise_date)
+    if (props.strategyResult.rise_date) {
+      const item = data.find(d => d.trade_date === props.strategyResult.rise_date)
       if (item) {
         strategyMarkPoints.push({
-          coord: [strategyResult.value.rise_date, item.high],
+          coord: [props.strategyResult.rise_date, item.high],
           name: '大涨',
+          symbol: 'pin',
+          symbolSize: 20,
           label: {
             show: true,
-            formatter: `大涨${toFixed(strategyResult.value.rise_pct)}%`,
-            position: 'top',
-            fontSize: 14,
-            color: '#f5222d',
+            formatter: '涨',
+            position: 'inside',
+            fontSize: 10,
+            color: '#fff',
             fontWeight: 'bold',
-            backgroundColor: '#fff1f0',
-            padding: [4, 8],
-            borderRadius: 4,
           },
           itemStyle: {
             color: '#f5222d',
@@ -290,23 +278,22 @@ const renderChart = (data) => {
       }
     }
     
-    if (strategyResult.value.falling_dates && Array.isArray(strategyResult.value.falling_dates)) {
-      strategyResult.value.falling_dates.forEach((date, idx) => {
+    if (props.strategyResult.falling_dates && Array.isArray(props.strategyResult.falling_dates)) {
+      props.strategyResult.falling_dates.forEach((date, idx) => {
         const item = data.find(d => d.trade_date === date)
         if (item) {
           strategyMarkPoints.push({
             coord: [date, item.low],
             name: '下跌',
+            symbol: 'pin',
+            symbolSize: 20,
             label: {
               show: true,
-              formatter: `跌${idx + 1}`,
-              position: 'bottom',
-              fontSize: 14,
-              color: '#26a69a',
+              formatter: `${idx + 1}`,
+              position: 'inside',
+              fontSize: 10,
+              color: '#fff',
               fontWeight: 'bold',
-              backgroundColor: '#f6ffed',
-              padding: [4, 8],
-              borderRadius: 4,
             },
             itemStyle: {
               color: '#26a69a',
@@ -326,7 +313,7 @@ const renderChart = (data) => {
     animationEasing: 'cubicOut',
     animationEasingUpdate: 'cubicOut',
     title: {
-      text: stockCode + ' ' + stockName.value + ' K线图',
+      text: props.stockCode + ' ' + stockName.value + ' K线图',
     },
     tooltip: {
       trigger: 'axis',
@@ -653,22 +640,54 @@ const renderChart = (data) => {
   })
 }
 
+const loadStockInfo = async () => {
+  try {
+    const res = await api.get(`/stocks/${props.stockCode}`)
+    if (res.code === 0) {
+      stockName.value = res.data.name || ''
+    }
+  } catch (error) {
+    console.error(error)
+  }
+}
+
+const loadKlineData = async () => {
+  try {
+    const res = await api.get(`/stocks/${props.stockCode}/kline`)
+    if (res.code === 0 && res.data.klines && res.data.klines.length > 0) {
+      allData = res.data.klines
+      await nextTick()
+      renderChart(allData)
+    }
+  } catch (error) {
+    console.error(error)
+  }
+}
+
+const handleClose = () => {
+  if (chart) {
+    chart.dispose()
+    chart = null
+  }
+  stockName.value = ''
+  currentDate.value = ''
+  currentData.value = null
+  allData = []
+}
+
 const handleResize = () => {
   chart && chart.resize && chart.resize()
 }
 
-onMounted(async () => {
-  await nextTick()
-  if (route.query.strategyResult) {
-    try {
-      strategyResult.value = JSON.parse(route.query.strategyResult)
-    } catch (e) {
-      console.error(e)
-    }
+watch(() => props.visible, async (newVal) => {
+  if (newVal && props.stockCode) {
+    await nextTick()
+    await loadStockInfo()
+    await loadKlineData()
+    window.addEventListener('resize', handleResize)
+  } else {
+    window.removeEventListener('resize', handleResize)
   }
-  await loadStockInfo()
-  await loadKlineData()
-  window.addEventListener('resize', handleResize)
 })
 
 onUnmounted(() => {

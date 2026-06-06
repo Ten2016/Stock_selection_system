@@ -23,8 +23,19 @@ class SyncRequest(BaseModel):
     end_date: str
 
 
-def process_single_stock(stock, start_date, end_date, skipped_codes):
-    """处理单个股票的函数，用于并发执行"""
+def process_single_stock(stock, start_date, end_date, skipped_codes, existing_dates_cache, skip_info_cache, skip_check=True, only_skip_list=False):
+    """处理单个股票的函数，用于并发执行
+    
+    Args:
+        stock: 股票对象
+        start_date: 开始日期
+        end_date: 结束日期
+        skipped_codes: 跳过列表
+        existing_dates_cache: 预先加载的现有日期缓存 {stock_code: set(dates)}
+        skip_info_cache: 预先加载的跳过信息缓存 {stock_code: (should_skip, reason)}
+        skip_check: 是否检查跳过列表（默认True）
+        only_skip_list: 是否只检查跳过列表，不检查 should_skip_stock（近10天同步时为True）
+    """
     stock_code = stock.code
     stock_name = stock.name
     result = {
@@ -36,28 +47,29 @@ def process_single_stock(stock, start_date, end_date, skipped_codes):
     }
     
     try:
-        # 检查是否在跳过列表中
-        from app.utils.skipped_stocks import is_skipped
-        if is_skipped(stock_code, cached_codes=skipped_codes):
-            result["status"] = "skipped"
-            result["reason"] = "在跳过列表中"
-            return result
-        
-        # 检查是否应该跳过
-        from app.utils.database import SessionLocal
-        from app.services import sync_service
-        with SessionLocal() as db:
-            should_skip, reason = sync_service.should_skip_stock(db, stock_code, start_date, end_date)
-            if should_skip:
+        # 检查是否在跳过列表中（仅当需要检查时）
+        if skip_check:
+            from app.utils.skipped_stocks import is_skipped
+            if is_skipped(stock_code, cached_codes=skipped_codes):
                 result["status"] = "skipped"
-                result["reason"] = reason
+                result["reason"] = "在跳过列表中"
                 return result
         
-        # 获取现有数据
-        with SessionLocal() as db:
-            existing_dates = sync_service.get_existing_dates(db, stock_code)
+        # 检查是否应该跳过（仅当需要检查且 not only_skip_list 时）
+        if skip_check and not only_skip_list:
+            # 从缓存获取跳过信息（避免重复查询数据库）
+            if stock_code in skip_info_cache:
+                should_skip, reason = skip_info_cache[stock_code]
+                if should_skip:
+                    result["status"] = "skipped"
+                    result["reason"] = reason
+                    return result
+        
+        # 从缓存获取现有数据（避免重复查询数据库）
+        existing_dates = existing_dates_cache.get(stock_code, set())
         
         # 抓取新数据
+        from app.services import sync_service
         kline_data = sync_service.fetch_one_stock_history_with_db(stock_code, start_date, end_date, existing_dates)
         
         if len(kline_data) > 0:
@@ -66,6 +78,10 @@ def process_single_stock(stock, start_date, end_date, skipped_codes):
         else:
             result["status"] = "no_data"
             result["reason"] = "no data available"
+        
+        # 每个请求完成后，在工作线程中随机等待100-300毫秒
+        sleep_time = random.uniform(0.1, 0.3)
+        time.sleep(sleep_time)
         
     except Exception as e:
         result["status"] = "failed"
@@ -76,7 +92,15 @@ def process_single_stock(stock, start_date, end_date, skipped_codes):
     return result
 
 
-def run_sync_task(start_date: str, end_date: str):
+def run_sync_task(start_date: str, end_date: str, skip_check: bool = True, only_skip_list: bool = False):
+    """运行同步任务
+    
+    Args:
+        start_date: 开始日期
+        end_date: 结束日期
+        skip_check: 是否检查跳过列表（默认True）
+        only_skip_list: 是否只检查跳过列表，不检查 should_skip_stock（近10天同步时为True）
+    """
     global sync_status
     # 在函数最开始初始化所有变量，避免作用域问题
     count = 0
@@ -96,6 +120,10 @@ def run_sync_task(start_date: str, end_date: str):
         print("[START] Starting sync task")
         print(f"[INFO] Date range: {start_date} to {end_date}")
         print(f"[INFO] Concurrent requests: 100")
+        if only_skip_list:
+            print(f"[INFO] Mode: Only skip list check (skip excluded stocks, sync all others)")
+        else:
+            print(f"[INFO] Skip check: {'enabled' if skip_check else 'disabled'}")
         print("[INFO] Press Ctrl+C to cancel sync")
         print("=" * 50)
         
@@ -134,6 +162,45 @@ def run_sync_task(start_date: str, end_date: str):
         skipped_codes = load_skipped_codes()
         print(f"[INFO] Loaded {len(skipped_codes)} stocks from skip list")
         
+        # 预先加载所有股票的现有日期到缓存（避免每个线程都查询数据库）
+        print("[INFO] Pre-loading existing dates cache...")
+        existing_dates_cache = {}
+        with SessionLocal() as db:
+            from app.models import StockKline
+            from sqlalchemy import func
+            # 批量查询所有股票的现有日期
+            results = db.query(StockKline.stock_code, func.group_concat(StockKline.trade_date)).group_by(StockKline.stock_code).all()
+            for stock_code, dates_str in results:
+                if dates_str:
+                    existing_dates_cache[stock_code] = set(dates_str.split(','))
+        print(f"[INFO] Cached existing dates for {len(existing_dates_cache)} stocks")
+        
+        # 预先加载跳过信息缓存（避免每个线程都查询数据库）
+        print("[INFO] Pre-loading skip info cache...")
+        skip_info_cache = {}
+        with SessionLocal() as db:
+            from app.models import StockKline
+            from sqlalchemy import func
+            # 批量查询所有股票的最小/最大日期和记录数
+            results = db.query(
+                StockKline.stock_code,
+                func.min(StockKline.trade_date).label('min_date'),
+                func.max(StockKline.trade_date).label('max_date'),
+                func.count(StockKline.id).label('count')
+            ).group_by(StockKline.stock_code).all()
+            
+            start = datetime.strptime(start_date, '%Y-%m-%d').date()
+            end = datetime.strptime(end_date, '%Y-%m-%d').date()
+            
+            for stock_code, min_date, max_date, count in results:
+                if count == 0:
+                    skip_info_cache[stock_code] = (False, "no data")
+                elif min_date <= end and max_date >= start:
+                    skip_info_cache[stock_code] = (True, f"data exists ({min_date} to {max_date}, {count} records)")
+                else:
+                    skip_info_cache[stock_code] = (False, f"partial data ({min_date} to {max_date}, {count} records)")
+        print(f"[INFO] Cached skip info for {len(skip_info_cache)} stocks")
+        
         # 使用线程池并发处理
         from app.services import sync_service
         max_workers = 100
@@ -141,9 +208,13 @@ def run_sync_task(start_date: str, end_date: str):
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             # 提交所有任务
             future_to_stock = {
-                executor.submit(process_single_stock, stock, start_date, end_date, skipped_codes): stock 
+                executor.submit(process_single_stock, stock, start_date, end_date, skipped_codes, existing_dates_cache, skip_info_cache, skip_check, only_skip_list): stock 
                 for stock in filtered_stocks
             }
+            
+            # 批量保存数据（每10个成功结果保存一次）
+            batch_save_size = 10
+            batch_results = []
             
             # 处理完成的任务
             for future in as_completed(future_to_stock):
@@ -165,11 +236,17 @@ def run_sync_task(start_date: str, end_date: str):
                         count += 1
                         
                         if result["status"] == "success":
-                            # 保存数据
-                            with SessionLocal() as db:
-                                sync_service.save_kline_data(db, stock_code, result["kline_data"])
+                            batch_results.append((stock_code, result["kline_data"]))
                             success_count += 1
-                            print(f"[OK] [{count}/{total}] {stock_code} {stock_name} saved {len(result['kline_data'])} records")
+                            print(f"[OK] [{count}/{total}] {stock_code} {stock_name} fetched {len(result['kline_data'])} records")
+                            
+                            # 批量保存
+                            if len(batch_results) >= batch_save_size:
+                                with SessionLocal() as db:
+                                    for code, data in batch_results:
+                                        sync_service.save_kline_data(db, code, data)
+                                print(f"[INFO] Batch saved {len(batch_results)} stocks")
+                                batch_results.clear()
                             
                         elif result["status"] == "skipped":
                             skipped_count += 1
@@ -192,10 +269,6 @@ def run_sync_task(start_date: str, end_date: str):
                         sync_status["failed_stocks"] = failed_stocks
                         sync_status["no_data_stocks"] = no_data_stocks
                     
-                    # 每个请求完成后，随机等待100-300毫秒
-                    sleep_time = random.uniform(0.1, 0.3)
-                    time.sleep(sleep_time)
-                    
                 except Exception as e:
                     with lock:
                         count += 1
@@ -203,6 +276,13 @@ def run_sync_task(start_date: str, end_date: str):
                         print(f"[ERROR] [{count}/{total}] Failed to process {stock_code}: {e}")
                         sync_status["failed_count"] = len(failed_stocks)
                         sync_status["failed_stocks"] = failed_stocks
+            
+            # 保存剩余的批量结果
+            if batch_results:
+                with SessionLocal() as db:
+                    for code, data in batch_results:
+                        sync_service.save_kline_data(db, code, data)
+                print(f"[INFO] Final batch saved {len(batch_results)} stocks")
         
         print("\n[STEP 3/3] Saving sync record...")
         sync_service.create_sync_record(end_date, total, success_count, skipped_count, len(failed_stocks), len(no_data_stocks), failed_stocks, no_data_stocks)
@@ -286,8 +366,30 @@ async def start_sync(
     if not request.start_date or not request.end_date:
         return error(code=1, msg="起始时间和结束时间不能为空")
     
-    background_tasks.add_task(run_sync_task, request.start_date, request.end_date)
+    background_tasks.add_task(run_sync_task, request.start_date, request.end_date, True)
     return success(msg="同步任务已启动")
+
+
+@router.post("/start-recent-days")
+async def start_sync_recent_days(
+    background_tasks: BackgroundTasks
+):
+    """同步近10天数据，跳过排除列表，有则更新无则插入"""
+    if sync_status["is_syncing"]:
+        return error(code=1, msg="已有同步任务在进行中")
+    
+    # 计算近10天的日期范围
+    today = datetime.now().date()
+    # 找到最近10个交易日（考虑到周末和节假日，往前推15天）
+    end_date = today
+    start_date = today - timedelta(days=15)
+    
+    start_date_str = start_date.strftime('%Y-%m-%d')
+    end_date_str = end_date.strftime('%Y-%m-%d')
+    
+    # skip_check=True 表示检查跳过列表，但跳过 should_skip_stock 检查（只检查排除列表）
+    background_tasks.add_task(run_sync_task, start_date_str, end_date_str, True, True)
+    return success(msg=f"近10天同步任务已启动（{start_date_str} 到 {end_date_str}）")
 
 
 @router.post("/cancel")

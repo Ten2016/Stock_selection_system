@@ -6,6 +6,7 @@
           <span>数据同步</span>
           <div>
             <el-button type="primary" @click="startSync" :disabled="syncing">开始同步</el-button>
+            <el-button type="success" @click="startSyncRecentDays" :disabled="syncing">同步近10天</el-button>
             <el-button type="danger" @click="cancelSync" :disabled="!syncing">取消同步</el-button>
           </div>
         </div>
@@ -207,6 +208,18 @@ const startSync = async () => {
   try {
     const params = { start_date: syncForm.value.startDate, end_date: syncForm.value.endDate }
     const res = await api.post('/sync/start', params)
+    ElMessage.success(res.msg)
+    syncing.value = true
+    realtimeProgress.value = null
+    startPolling()
+  } catch (error) {
+    console.error(error)
+  }
+}
+
+const startSyncRecentDays = async () => {
+  try {
+    const res = await api.post('/sync/start-recent-days')
     ElMessage.success(res.msg)
     syncing.value = true
     realtimeProgress.value = null
