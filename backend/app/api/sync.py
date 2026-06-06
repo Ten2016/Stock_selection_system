@@ -340,7 +340,7 @@ async def sync_basic_info(
     if sync_status["is_syncing"]:
         return error(code=1, msg="已有同步任务在进行中")
     
-    background_tasks.add_task(run_basic_info_sync)
+    background_tasks.add_task(sync_service.run_basic_info_sync)
     return success(msg="基本信息同步任务已启动")
 
 
