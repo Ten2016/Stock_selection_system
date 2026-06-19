@@ -151,167 +151,28 @@ const syncing = ref(false)
 const syncStatus = ref(null)
 const skippedStocks = ref([])
 const realtimeProgress = ref(null)
-
 const today = new Date().toISOString().split('T')[0]
-const syncForm = ref({
-  startDate: '2024-01-01',
-  endDate: today
-})
+const syncForm = ref({ startDate: '2024-01-01', endDate: today })
 let timer = null
 
-// 加载历史同步数据（只调用一次）
-const loadSyncHistory = async () => {
-  try {
-    const res = await api.get('/sync/history')
-    syncStatus.value = res.data
-  } catch (error) {
-    console.error(error)
-  }
-}
-
-// 轮询同步进度（只在同步时调用）
-const pollSyncProgress = async () => {
-  try {
-    const res = await api.get('/sync/progress')
-    realtimeProgress.value = res.data
-    
-    if (!res.data.is_syncing && syncing.value) {
-      syncing.value = false
-      stopPolling()
-      await loadSyncHistory()
-      await loadSkippedStocks()
-      realtimeProgress.value = null
-    }
-  } catch (error) {
-    console.error(error)
-  }
-}
-
-const startPolling = () => {
-  stopPolling()
-  timer = setInterval(() => {
-    pollSyncProgress()
-  }, 2000)
-}
-
-const stopPolling = () => {
-  if (timer) {
-    clearInterval(timer)
-    timer = null
-  }
-}
+const loadSyncHistory = async () => { try { const res = await api.get('/sync/history'); syncStatus.value = res.data } catch (error) { console.error(error) } }
+const loadSkippedStocks = async () => { try { const res = await api.get('/sync/skipped-stocks'); skippedStocks.value = res.data.stocks || [] } catch (error) { console.error(error) } }
+const pollSyncProgress = async () => { try { const res = await api.get('/sync/progress'); realtimeProgress.value = res.data; if (!res.data.is_syncing && syncing.value) { syncing.value = false; stopPolling(); await loadSyncHistory(); await loadSkippedStocks(); realtimeProgress.value = null } } catch (error) { console.error(error) } }
+const startPolling = () => { stopPolling(); timer = setInterval(pollSyncProgress, 2000) }
+const stopPolling = () => { if (timer) { clearInterval(timer); timer = null } }
 
 const startSync = async () => {
-  if (!syncForm.value.startDate || !syncForm.value.endDate) {
-    ElMessage.error('请选择起始日期和结束日期')
-    return
-  }
-  try {
-    const params = { start_date: syncForm.value.startDate, end_date: syncForm.value.endDate }
-    const res = await api.post('/sync/start', params)
-    ElMessage.success(res.msg)
-    syncing.value = true
-    realtimeProgress.value = null
-    startPolling()
-  } catch (error) {
-    console.error(error)
-  }
+  if (!syncForm.value.startDate || !syncForm.value.endDate) return ElMessage.error('请选择起始日期和结束日期')
+  try { const res = await api.post('/sync/start', { start_date: syncForm.value.startDate, end_date: syncForm.value.endDate }); ElMessage.success(res.msg); syncing.value = true; realtimeProgress.value = null; startPolling() } catch (error) { console.error(error) }
 }
+const startSyncRecentDays = async () => { try { const res = await api.post('/sync/start-recent-days'); ElMessage.success(res.msg); syncing.value = true; realtimeProgress.value = null; startPolling() } catch (error) { console.error(error) } }
+const startSyncBasicInfo = async () => { try { const res = await syncBasicInfo(); ElMessage.success(res.msg); syncing.value = true; realtimeProgress.value = null; startPolling() } catch (error) { console.error(error) } }
+const cancelSync = async () => { try { const res = await api.post('/sync/cancel'); ElMessage.success(res.msg) } catch (error) { console.error(error) } }
+const addOneToSkip = async (stock) => { try { await api.post('/sync/skipped-stocks/add', { stocks: [stock] }); ElMessage.success('已加入跳过列表'); await loadSkippedStocks() } catch (error) { console.error(error) } }
+const addAllFailedToSkip = async () => { try { if (!syncStatus.value?.failed_stocks?.length) return; await api.post('/sync/skipped-stocks/add', { stocks: syncStatus.value.failed_stocks }); ElMessage.success('全部加入跳过列表'); await loadSkippedStocks() } catch (error) { console.error(error) } }
+const addAllNoDataToSkip = async () => { try { if (!syncStatus.value?.no_data_stocks?.length) return; await api.post('/sync/skipped-stocks/add', { stocks: syncStatus.value.no_data_stocks }); ElMessage.success('全部加入跳过列表'); await loadSkippedStocks() } catch (error) { console.error(error) } }
+const removeFromSkip = async (code) => { try { await api.post('/sync/skipped-stocks/remove', { code }); ElMessage.success('已从跳过列表移除'); await loadSkippedStocks() } catch (error) { console.error(error) } }
 
-const startSyncRecentDays = async () => {
-  try {
-    const res = await api.post('/sync/start-recent-days')
-    ElMessage.success(res.msg)
-    syncing.value = true
-    realtimeProgress.value = null
-    startPolling()
-  } catch (error) {
-    console.error(error)
-  }
-}
-
-const startSyncBasicInfo = async () => {
-  try {
-    const res = await syncBasicInfo()
-    ElMessage.success(res.msg)
-    syncing.value = true
-    realtimeProgress.value = null
-    startPolling()
-  } catch (error) {
-    console.error(error)
-  }
-}
-
-const cancelSync = async () => {
-  try {
-    const res = await api.post('/sync/cancel')
-    ElMessage.success(res.msg)
-  } catch (error) {
-    console.error(error)
-  }
-}
-
-const loadSkippedStocks = async () => {
-  try {
-    const res = await api.get('/sync/skipped-stocks')
-    skippedStocks.value = res.data.stocks || []
-  } catch (error) {
-    console.error(error)
-  }
-}
-
-const addOneToSkip = async (stock) => {
-  try {
-    await api.post('/sync/skipped-stocks/add', { stocks: [stock] })
-    ElMessage.success('已加入跳过列表')
-    await loadSkippedStocks()
-  } catch (error) {
-    console.error(error)
-  }
-}
-
-const addAllFailedToSkip = async () => {
-  try {
-    if (!syncStatus.value.failed_stocks || syncStatus.value.failed_stocks.length === 0) {
-      return
-    }
-    await api.post('/sync/skipped-stocks/add', { stocks: syncStatus.value.failed_stocks })
-    ElMessage.success('全部加入跳过列表')
-    await loadSkippedStocks()
-  } catch (error) {
-    console.error(error)
-  }
-}
-
-const addAllNoDataToSkip = async () => {
-  try {
-    if (!syncStatus.value.no_data_stocks || syncStatus.value.no_data_stocks.length === 0) {
-      return
-    }
-    await api.post('/sync/skipped-stocks/add', { stocks: syncStatus.value.no_data_stocks })
-    ElMessage.success('全部加入跳过列表')
-    await loadSkippedStocks()
-  } catch (error) {
-    console.error(error)
-  }
-}
-
-const removeFromSkip = async (code) => {
-  try {
-    await api.post('/sync/skipped-stocks/remove', { code })
-    ElMessage.success('已从跳过列表移除')
-    await loadSkippedStocks()
-  } catch (error) {
-    console.error(error)
-  }
-}
-
-onMounted(async () => {
-  await loadSyncHistory()
-  await loadSkippedStocks()
-})
-
-onUnmounted(() => {
-  stopPolling()
-})
+onMounted(async () => { await loadSyncHistory(); await loadSkippedStocks() })
+onUnmounted(stopPolling)
 </script>

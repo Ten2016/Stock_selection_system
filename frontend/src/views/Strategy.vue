@@ -142,7 +142,8 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted } from 'vue'
+import { ElMessage } from 'element-plus'
 import { getStrategies, selectStocks, getLatestStrategyResult } from '../api'
 import KlineChartDialog from '../components/KlineChartDialog.vue'
 
@@ -154,38 +155,21 @@ const totalCount = ref(0)
 const chartDialogVisible = ref(false)
 const selectedStockCode = ref('')
 const selectedStockResult = ref(null)
-const form = ref({
-  strategy: '',
-  minMarketCap: null,
-  xDays: 30,
-  yDays: 10,
-  zDays: 2,
-  yPct: 5.0
-})
+const form = ref({ strategy: '', minMarketCap: null, xDays: 30, yDays: 10, zDays: 2, yPct: 5.0 })
 
-const selectedStrategy = computed(() => {
-  return strategies.value.find(s => s.name === form.value.strategy)
-})
+const selectedStrategy = computed(() => strategies.value.find(s => s.name === form.value.strategy))
+const toFixed = (num, digits = 2) => (num == null || Number.isNaN(Number(num)) ? '-' : Number(num).toFixed(digits))
 
-const toFixed = (num, digits = 2) => {
-  if (num == null) return '-'
-  const n = Number(num)
-  if (isNaN(n)) return '-'
-  return n.toFixed(digits)
-}
-
-// 加载策略的最新结果
 const loadLatestResult = async (strategyName) => {
   if (!strategyName) return
   try {
     const res = await getLatestStrategyResult(strategyName)
-    if (res.data && res.data.selected_stocks && res.data.selected_stocks.length > 0) {
+    if (res.data?.selected_stocks?.length > 0) {
       results.value = res.data.selected_stocks
-      totalCount.value = res.data.total_count
+      totalCount.value = res.data.total_count || 0
       hasRun.value = true
-      // 恢复参数
       if (res.data.params) {
-        form.value.minMarketCap = res.data.params.min_market_cap
+        form.value.minMarketCap = res.data.params.min_market_cap ?? null
         form.value.xDays = res.data.params.x_days || form.value.xDays
         form.value.yDays = res.data.params.y_days || form.value.yDays
         form.value.zDays = res.data.params.z_days || form.value.zDays
@@ -200,10 +184,9 @@ const loadLatestResult = async (strategyName) => {
 onMounted(async () => {
   try {
     const res = await getStrategies()
-    strategies.value = res.data
+    strategies.value = Array.isArray(res.data) ? res.data : []
     if (strategies.value.length > 0) {
       form.value.strategy = strategies.value[0].name
-      // 加载默认策略的最新结果
       await loadLatestResult(form.value.strategy)
     }
   } catch (error) {
@@ -212,43 +195,21 @@ onMounted(async () => {
 })
 
 const onStrategyChange = () => {
-  // 切换策略时重置参数
   if (form.value.strategy === 'consecutive_ma5') {
-    form.value.xDays = 30
-    form.value.yDays = 10
-    form.value.zDays = 2
+    form.value.xDays = 30; form.value.yDays = 10; form.value.zDays = 2
   } else if (form.value.strategy === 'rise_then_fall') {
-    form.value.xDays = 30
-    form.value.yPct = 5.0
-    form.value.zDays = 3
+    form.value.xDays = 30; form.value.yPct = 5.0; form.value.zDays = 3
   }
-  // 加载新策略的最新结果
-  results.value = []
-  totalCount.value = 0
-  hasRun.value = false
-  loadLatestResult(form.value.strategy)
+  results.value = []; totalCount.value = 0; hasRun.value = false; loadLatestResult(form.value.strategy)
 }
 
 const runStrategy = async () => {
-  if (!form.value.strategy) {
-    alert('请选择策略')
-    return
-  }
-
-  loading.value = true
-  hasRun.value = true
+  if (!form.value.strategy) return ElMessage.warning('请选择策略')
+  loading.value = true; hasRun.value = true
   try {
-    const res = await selectStocks(
-      form.value.strategy,
-      form.value.minMarketCap,
-      form.value.xDays,
-      form.value.yDays,
-      form.value.zDays,
-      form.value.yPct
-    )
-    console.log('策略结果:', res.data)
-    results.value = res.data.selected_stocks
-    totalCount.value = res.data.total_count
+    const res = await selectStocks(form.value.strategy, form.value.minMarketCap, form.value.xDays, form.value.yDays, form.value.zDays, form.value.yPct)
+    results.value = res.data.selected_stocks || []
+    totalCount.value = res.data.total_count || 0
   } catch (error) {
     console.error(error)
   } finally {
@@ -256,11 +217,7 @@ const runStrategy = async () => {
   }
 }
 
-const viewStock = (row) => {
-  selectedStockCode.value = row.code
-  selectedStockResult.value = row.result
-  chartDialogVisible.value = true
-}
+const viewStock = (row) => { selectedStockCode.value = row.code; selectedStockResult.value = row.result; chartDialogVisible.value = true }
 </script>
 
 <style scoped>

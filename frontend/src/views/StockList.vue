@@ -27,7 +27,7 @@
           </div>
         </div>
       </template>
-      <el-table :data="stocks" style="width: 100%" @sort-change="handleSortChange" :default-sort="{prop: 'total_cap', order: 'descending'}">
+      <el-table :data="stocks" style="width: 100%" @sort-change="handleSortChange" :default-sort="{prop: 'total_cap', order: 'descending'}" v-loading="loading">
         <el-table-column label="序号" width="60">
           <template #default="{ $index }">
             {{ (currentPage - 1) * pageSize + $index + 1 }}
@@ -37,28 +37,28 @@
         <el-table-column prop="name" label="名称" width="120" />
         <el-table-column prop="total_cap" label="总市值(亿)" width="110" sortable="custom">
           <template #default="{ row }">
-            {{ row.total_cap ? row.total_cap.toFixed(2) : '-' }}
+            {{ formatNumber(row.total_cap) }}
           </template>
         </el-table-column>
         <el-table-column prop="pe_ratio" label="动态市盈率" width="110" sortable="custom">
           <template #default="{ row }">
-            {{ row.pe_ratio ? row.pe_ratio.toFixed(2) : '-' }}
+            {{ formatNumber(row.pe_ratio) }}
           </template>
         </el-table-column>
         <el-table-column prop="pe_ratio_static" label="静态市盈率" width="110">
           <template #default="{ row }">
-            {{ row.pe_ratio_static ? row.pe_ratio_static.toFixed(2) : '-' }}
+            {{ formatNumber(row.pe_ratio_static) }}
           </template>
         </el-table-column>
         <el-table-column prop="pb_ratio" label="市净率" width="100" sortable="custom">
           <template #default="{ row }">
-            {{ row.pb_ratio ? row.pb_ratio.toFixed(2) : '-' }}
+            {{ formatNumber(row.pb_ratio) }}
           </template>
         </el-table-column>
         <el-table-column prop="ytd_change_pct" label="今年涨跌幅" width="110" sortable="custom">
           <template #default="{ row }">
             <span v-if="row.ytd_change_pct != null" :style="{color: row.ytd_change_pct >= 0 ? '#ef5350' : '#26a69a'}">
-              {{ row.ytd_change_pct.toFixed(2) }}%
+              {{ formatNumber(row.ytd_change_pct) }}%
             </span>
             <span v-else>-</span>
           </template>
@@ -112,14 +112,21 @@ const total = ref(0)
 const currentPage = ref(1)
 const pageSize = ref(50)
 const searchKeyword = ref('')
-const clearingCode = ref('')
 const clearingAll = ref(false)
+const loading = ref(false)
 const chartDialogVisible = ref(false)
 const selectedStockCode = ref('')
 const sortBy = ref('total_cap')
 const sortOrder = ref('desc')
 
+const formatNumber = (value, digits = 2) => {
+  if (value == null || value === '') return '-'
+  const n = Number(value)
+  return Number.isFinite(n) ? n.toFixed(digits) : '-'
+}
+
 const loadStocks = async () => {
+  loading.value = true
   try {
     const params = {
       skip: (currentPage.value - 1) * pageSize.value,
@@ -127,57 +134,21 @@ const loadStocks = async () => {
       sort_by: sortBy.value,
       sort_order: sortOrder.value,
     }
-    if (searchKeyword.value) {
-      params.search = searchKeyword.value
-    }
+    if (searchKeyword.value) params.search = searchKeyword.value
     const res = await api.get('/stocks', { params })
-    stocks.value = res.data.list
-    total.value = res.data.total
-  } catch (error) {
-    console.error(error)
-  }
-}
-
-const handleSearch = () => {
-  currentPage.value = 1
-  loadStocks()
-}
-
-const handleSortChange = ({ prop, order }) => {
-  if (!prop || !order) {
-    // 取消排序时恢复默认排序
-    sortBy.value = 'total_cap'
-    sortOrder.value = 'desc'
-  } else {
-    sortBy.value = prop
-    sortOrder.value = order === 'ascending' ? 'asc' : 'desc'
-  }
-  currentPage.value = 1
-  loadStocks()
-}
-
-const handlePageChange = (page) => {
-  currentPage.value = page
-  loadStocks()
-}
-
-const viewStock = (row) => {
-  selectedStockCode.value = row.code
-  chartDialogVisible.value = true
-}
-
-const clearStockKline = async (code) => {
-  try {
-    clearingCode.value = code
-    const res = await api.delete(`/stocks/${code}/kline`)
-    ElMessage.success(res.msg)
-    await loadStocks()
+    stocks.value = res.data.list || []
+    total.value = res.data.total || 0
   } catch (error) {
     console.error(error)
   } finally {
-    clearingCode.value = ''
+    loading.value = false
   }
 }
+
+const handleSearch = () => { currentPage.value = 1; loadStocks() }
+const handleSortChange = ({ prop, order }) => { sortBy.value = prop || 'total_cap'; sortOrder.value = order === 'ascending' ? 'asc' : 'desc'; currentPage.value = 1; loadStocks() }
+const handlePageChange = (page) => { currentPage.value = page; loadStocks() }
+const viewStock = (row) => { selectedStockCode.value = row.code; chartDialogVisible.value = true }
 
 const clearAllStockData = async () => {
   try {
@@ -192,7 +163,5 @@ const clearAllStockData = async () => {
   }
 }
 
-onMounted(() => {
-  loadStocks()
-})
+onMounted(loadStocks)
 </script>

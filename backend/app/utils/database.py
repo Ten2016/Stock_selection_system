@@ -1,8 +1,12 @@
-from sqlalchemy import create_engine, text, event
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker, declarative_base
 
 from app.core.config import settings
-import os
+from app.utils.startup_checks import (
+    ensure_sqlite_database_path,
+    repair_stock_kline_schema,
+    collect_table_status,
+)
 
 
 SQLALCHEMY_DATABASE_URL = settings.DATABASE_URL
@@ -36,44 +40,23 @@ def get_db():
         db.close()
 
 
-def _migrate_stock_kline_unique(conn):
-    dup_count = conn.execute(text(
-        "SELECT COUNT(*) - COUNT(DISTINCT stock_code || '|' || trade_date) FROM stock_kline"
-    )).scalar()
-    if dup_count and dup_count > 0:
-        conn.execute(text("""
-            DELETE FROM stock_kline
-            WHERE id NOT IN (
-                SELECT MAX(id) FROM stock_kline GROUP BY stock_code, trade_date
-            )
-        """))
-        conn.commit()
-        print(f"Removed {dup_count} duplicate stock_kline rows.")
-
-    existing = conn.execute(text(
-        "SELECT name FROM sqlite_master WHERE type='index' AND name='uq_stock_kline_code_date'"
-    )).fetchone()
-    if not existing:
-        conn.execute(text(
-            "CREATE UNIQUE INDEX uq_stock_kline_code_date "
-            "ON stock_kline(stock_code, trade_date)"
-        ))
-        conn.commit()
-        print("Created unique index uq_stock_kline_code_date on stock_kline.")
-
-
 def init_db():
-    os.makedirs(os.path.dirname(settings.DATABASE_URL.replace("sqlite:///", "")), exist_ok=True)
+    ensure_sqlite_database_path(SQLALCHEMY_DATABASE_URL)
     Base.metadata.create_all(bind=engine)
 
-    with engine.connect() as conn:
-        try:
-            conn.execute(text("ALTER TABLE stock_kline ADD COLUMN dividend_info JSON"))
-            conn.commit()
-            print("Added dividend_info column to stock_kline table.")
-        except Exception:
-            pass
+    with engine.begin() as conn:
+        duplicate_rows = repair_stock_kline_schema(conn)
+        table_report = collect_table_status(conn)
 
-        _migrate_stock_kline_unique(conn)
+    print("=" * 80)
+    print("[STARTUP CHECK] Database and schema self-check")
+    print(f"[STARTUP CHECK] Database URL: {settings.DATABASE_URL}")
+    for table, info in table_report.items():
+        status = "OK" if info["exists"] else "MISSING"
+        rows = info["rows"] if info["rows"] is not None else "N/A"
+        print(f"[STARTUP CHECK] {table}: {status}, rows={rows}")
+    print(f"[STARTUP CHECK] stock_kline duplicate rows removed: {duplicate_rows}")
+    print("[STARTUP CHECK] stock_kline indexes: uq_stock_kline_code_date ensured")
+    print("[STARTUP CHECK] schema repair completed")
+    print("=" * 80)
 
-    print("Database initialized successfully.")
