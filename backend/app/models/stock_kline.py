@@ -1,7 +1,8 @@
-from sqlalchemy import Column, Integer, String, Date, TIMESTAMP, DECIMAL, JSON, Index, UniqueConstraint
+from sqlalchemy import Column, Integer, String, Date, TIMESTAMP, DECIMAL, Index, UniqueConstraint
 from sqlalchemy.sql import func
 
 from app.utils.database import Base
+from app.utils.sql_types import LenientJSON
 
 
 class StockKline(Base):
@@ -32,7 +33,7 @@ class StockKline(Base):
     boll_upper = Column(DECIMAL(10, 2))
     boll_mid = Column(DECIMAL(10, 2))
     boll_lower = Column(DECIMAL(10, 2))
-    dividend_info = Column(JSON)
+    dividend_info = Column(LenientJSON)
     created_at = Column(TIMESTAMP, server_default=func.now())
 
     def to_dict(self):

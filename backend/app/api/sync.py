@@ -4,7 +4,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from fastapi import APIRouter, Depends, BackgroundTasks
 from sqlalchemy.orm import Session
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.utils.database import get_db
 from app.utils.response import success, error
@@ -385,14 +385,19 @@ async def get_skipped_stocks():
     })
 
 
+class SkippedStockItem(BaseModel):
+    code: str
+    name: str
+
+
 class AddSkippedStocksRequest(BaseModel):
-    stocks: list
+    stocks: list[SkippedStockItem] = Field(default_factory=list)
 
 
 @router.post("/skipped-stocks/add")
 async def add_skipped_stocks_api(request: AddSkippedStocksRequest):
     from app.utils.skipped_stocks import add_skipped_stocks
-    stock_list = [(s["code"], s["name"]) for s in request.stocks]
+    stock_list = [(s.code, s.name) for s in request.stocks]
     add_skipped_stocks(stock_list)
     return success(msg=f"已添加 {len(stock_list)} 个股票到跳过列表")
 

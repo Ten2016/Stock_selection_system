@@ -16,12 +16,10 @@ def repair_stock_kline_schema(conn):
     columns = {row[1] for row in conn.execute(text("PRAGMA table_info(stock_kline)")).fetchall()}
     if "dividend_info" not in columns:
         conn.execute(text("ALTER TABLE stock_kline ADD COLUMN dividend_info JSON"))
-        conn.commit()
 
     indexes = {row[1] for row in conn.execute(text("PRAGMA index_list(stock_kline)")).fetchall()}
     if "uq_stock_kline_code_date" not in indexes:
         conn.execute(text("CREATE UNIQUE INDEX uq_stock_kline_code_date ON stock_kline(stock_code, trade_date)"))
-        conn.commit()
 
     dup_count = conn.execute(text(
         "SELECT COUNT(*) - COUNT(DISTINCT stock_code || '|' || trade_date) FROM stock_kline"
@@ -33,10 +31,8 @@ def repair_stock_kline_schema(conn):
                 SELECT MAX(id) FROM stock_kline GROUP BY stock_code, trade_date
             )
         """))
-        conn.commit()
         conn.execute(text("DROP INDEX IF EXISTS uq_stock_kline_code_date"))
         conn.execute(text("CREATE UNIQUE INDEX uq_stock_kline_code_date ON stock_kline(stock_code, trade_date)"))
-        conn.commit()
     return int(dup_count)
 
 

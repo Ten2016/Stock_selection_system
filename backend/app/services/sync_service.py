@@ -67,9 +67,11 @@ def _safe_float(val) -> Optional[float]:
 def _format_dividend_info(val) -> Optional[str]:
     if val is None:
         return None
-    if isinstance(val, dict):
+    if isinstance(val, (dict, list)):
         return json.dumps(val, ensure_ascii=False)
-    return str(val)
+    if isinstance(val, str):
+        return val
+    return json.dumps(val, ensure_ascii=False)
 
 
 def _df_to_rows(stock_code: str, df: pd.DataFrame) -> List[tuple]:
@@ -413,8 +415,8 @@ def get_sync_status() -> Dict[str, Any]:
                 "skipped_count": latest.skipped_count,
                 "failed_count": latest.failed_count,
                 "no_data_count": latest.no_data_count,
-                "failed_stocks": json.loads(latest.failed_stocks) if latest.failed_stocks else [],
-                "no_data_stocks": json.loads(latest.no_data_stocks) if latest.no_data_stocks else [],
+                "failed_stocks": latest.failed_stocks or [],
+                "no_data_stocks": latest.no_data_stocks or [],
             }
         return {
             "sync_date": None, "stock_count": 0, "status": "no_sync",
@@ -441,8 +443,8 @@ def create_sync_record(
             record.skipped_count = skipped_count
             record.failed_count = failed_count
             record.no_data_count = no_data_count
-            record.failed_stocks = json.dumps(failed_stocks) if failed_stocks else None
-            record.no_data_stocks = json.dumps(no_data_stocks) if no_data_stocks else None
+            record.failed_stocks = failed_stocks
+            record.no_data_stocks = no_data_stocks
         else:
             record = SyncRecord(
                 sync_date=sync_date_obj,
@@ -453,8 +455,8 @@ def create_sync_record(
                 skipped_count=skipped_count,
                 failed_count=failed_count,
                 no_data_count=no_data_count,
-                failed_stocks=json.dumps(failed_stocks) if failed_stocks else None,
-                no_data_stocks=json.dumps(no_data_stocks) if no_data_stocks else None,
+                failed_stocks=failed_stocks,
+                no_data_stocks=no_data_stocks,
             )
             db.add(record)
         db.commit()
