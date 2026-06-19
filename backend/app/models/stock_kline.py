@@ -29,7 +29,6 @@ class StockKline(Base):
     ma20 = Column(DECIMAL(10, 2))
     ma30 = Column(DECIMAL(10, 2))
     ma60 = Column(DECIMAL(10, 2))
-    ma120 = Column(DECIMAL(10, 2))
     boll_upper = Column(DECIMAL(10, 2))
     boll_mid = Column(DECIMAL(10, 2))
     boll_lower = Column(DECIMAL(10, 2))
@@ -54,7 +53,6 @@ class StockKline(Base):
             "ma20": float(self.ma20) if self.ma20 else None,
             "ma30": float(self.ma30) if self.ma30 else None,
             "ma60": float(self.ma60) if self.ma60 else None,
-            "ma120": float(self.ma120) if self.ma120 else None,
             "boll_upper": float(self.boll_upper) if self.boll_upper else None,
             "boll_mid": float(self.boll_mid) if self.boll_mid else None,
             "boll_lower": float(self.boll_lower) if self.boll_lower else None,

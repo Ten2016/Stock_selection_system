@@ -36,7 +36,6 @@ def calculate_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df['MA20'] = df['close'].rolling(window=20).mean().round(2)
     df['MA30'] = df['close'].rolling(window=30).mean().round(2)
     df['MA60'] = df['close'].rolling(window=60).mean().round(2)
-    df['MA120'] = df['close'].rolling(window=120).mean().round(2)
     
     std = df['close'].rolling(window=20).std()
     df['boll_upper'] = (df['MA20'] + 2 * std).round(2)

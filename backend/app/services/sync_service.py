@@ -26,9 +26,9 @@ REQUEST_DELAY_MAX = 0.6
 KLINE_UPSERT_SQL = """
     INSERT INTO stock_kline (
         stock_code, trade_date, open, high, low, close, volume, amount,
-        amplitude, change_pct, ma5, ma10, ma20, ma30, ma60, ma120,
+        amplitude, change_pct, ma5, ma10, ma20, ma30, ma60,
         boll_upper, boll_mid, boll_lower, dividend_info
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(stock_code, trade_date) DO UPDATE SET
         open = excluded.open,
         high = excluded.high,
@@ -43,7 +43,6 @@ KLINE_UPSERT_SQL = """
         ma20 = excluded.ma20,
         ma30 = excluded.ma30,
         ma60 = excluded.ma60,
-        ma120 = excluded.ma120,
         boll_upper = excluded.boll_upper,
         boll_mid = excluded.boll_mid,
         boll_lower = excluded.boll_lower,
@@ -106,7 +105,6 @@ def _df_to_rows(stock_code: str, df: pd.DataFrame) -> List[tuple]:
             _safe_float(col(row, 'MA20')),
             _safe_float(col(row, 'MA30')),
             _safe_float(col(row, 'MA60')),
-            _safe_float(col(row, 'MA120')),
             _safe_float(col(row, 'boll_upper')),
             _safe_float(col(row, 'boll_mid')),
             _safe_float(col(row, 'boll_lower')),
@@ -482,3 +480,85 @@ def run_basic_info_sync():
     except Exception as e:
         print(f"[FATAL ERROR] Basic info sync failed: {e}")
         traceback.print_exc()
+
+
+def run_repair_indicators():
+    """修复所有股票的K线指标数据：从数据库读取全部K线，重新计算指标后回写"""
+    from app.services.indicator_service import calculate_all_indicators
+    from app.utils.data_migrations import repair_json_columns
+
+    print("=" * 50)
+    print("[START] Starting repair indicators task")
+    print("=" * 50)
+
+    begin_sync()
+    try:
+        # 第一步：修复 JSON 格式数据
+        print("\n[STEP 1/2] Repairing JSON-like data...")
+        with engine.begin() as conn:
+            repaired_json = repair_json_columns(conn)
+        print(f"[INFO] JSON repair done: {repaired_json}")
+
+        # 第二步：重新计算所有股票的指标
+        print("\n[STEP 2/2] Recalculating indicators for all stocks...")
+        with SessionLocal() as db:
+            # 获取所有有K线数据的股票代码
+            stock_codes = db.query(StockKline.stock_code).distinct().all()
+            stock_codes = [s[0] for s in stock_codes]
+            total = len(stock_codes)
+            print(f"[INFO] Found {total} stocks with K-line data")
+
+            repaired = 0
+            for idx, code in enumerate(stock_codes):
+                if is_cancelled():
+                    print("\n[WARN] Repair cancelled by user")
+                    break
+
+                # 按日期升序取出全部K线
+                klines = db.query(StockKline).filter(
+                    StockKline.stock_code == code
+                ).order_by(StockKline.trade_date.asc()).all()
+
+                if not klines:
+                    continue
+
+                # 转为 DataFrame
+                rows = []
+                for k in klines:
+                    rows.append({
+                        'trade_date': k.trade_date,
+                        'open': float(k.open),
+                        'close': float(k.close),
+                        'high': float(k.high),
+                        'low': float(k.low),
+                        'volume': float(k.volume) if k.volume else None,
+                    })
+
+                df = pd.DataFrame(rows)
+                df['trade_date'] = pd.to_datetime(df['trade_date']).dt.date
+                df = df.sort_values('trade_date').reset_index(drop=True)
+
+                # 重新计算指标
+                df['amount'] = df['volume'] * df['close'] / 100
+                df['change_pct'] = ((df['close'] - df['close'].shift(1)) / df['close'].shift(1)) * 100
+                df['change_pct'] = df['change_pct'].round(2)
+                df['change_pct'] = df['change_pct'].where(df['change_pct'].notna(), None)
+                df = calculate_all_indicators(df)
+                df['amplitude'] = ((df['high'] - df['low']) / df['close'].shift(1)) * 100
+
+                # 批量 upsert 回数据库
+                save_kline_batch([(code, df)])
+                repaired += 1
+
+                if (idx + 1) % 100 == 0 or idx + 1 == total:
+                    print(f"[INFO] Repaired {idx + 1}/{total} stocks")
+                    sync_status["progress"] = 20 + int(((idx + 1) / total) * 70) if total else 100
+                    update_counts(idx + 1, 0, [], [], sync_status["progress"])
+
+            print(f"\n[DONE] Repair completed! Repaired {repaired} stocks")
+
+    except Exception as e:
+        print(f"[FATAL ERROR] Repair indicators failed: {e}")
+        traceback.print_exc()
+    finally:
+        end_sync()

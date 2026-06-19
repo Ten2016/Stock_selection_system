@@ -79,9 +79,6 @@
             <div v-if="currentData.ma60 != null" style="margin-bottom: 8px;">
               <span style="color:#ff6b6b;">●</span> MA60: {{ toFixed(currentData.ma60) }}
             </div>
-            <div v-if="currentData.ma120 != null" style="margin-bottom: 8px;">
-              <span style="color:#3ba272;">●</span> MA120: {{ toFixed(currentData.ma120) }}
-            </div>
             <div style="margin-top: 12px; padding-top: 8px; border-top: 1px solid #eee;"></div>
             <div v-if="currentData.boll_upper != null" style="margin-bottom: 8px;">
               <span style="color:#fc8452;">●</span> 布林上轨: {{ toFixed(currentData.boll_upper) }}
@@ -208,7 +205,6 @@ const renderChart = (data) => {
   const ma20 = data.map(item => item.ma20)
   const ma30 = data.map(item => item.ma30)
   const ma60 = data.map(item => item.ma60)
-  const ma120 = data.map(item => item.ma120)
   const bollUpper = data.map(item => item.boll_upper)
   const bollMid = data.map(item => item.boll_mid)
   const bollLower = data.map(item => item.boll_lower)
@@ -342,7 +338,7 @@ const renderChart = (data) => {
       show: false
     },
     legend: {
-      data: ['K线', 'MA5', 'MA10', 'MA30', 'MA60', 'MA120', '布林上轨', '布林中轨', '布林下轨'],
+      data: ['K线', 'MA5', 'MA10', 'MA30', 'MA60', '布林上轨', '布林中轨', '布林下轨'],
     },
     grid: {
       left: '80',
@@ -473,17 +469,6 @@ const renderChart = (data) => {
           width: 2,
           color: '#ff6b6b',
           opacity: 1,
-        },
-      },
-      {
-        name: 'MA120',
-        type: 'line',
-        data: ma120,
-        smooth: true,
-        symbol: 'none',
-        lineStyle: {
-          width: 1,
-          opacity: 0.8,
         },
       },
       {

@@ -183,7 +183,7 @@ def run_sync_task(start_date: str, end_date: str, skip_check: bool = True, histo
         print("\n[STEP 1.5/3] Pre-loading historical data for indicator calculation...")
         start_date_clean = start_date.replace('-', '')
         sync_start_date_obj = datetime.strptime(start_date_clean, "%Y%m%d").date()
-        history_start_date_obj = sync_start_date_obj - timedelta(days=120)
+        history_start_date_obj = sync_start_date_obj - timedelta(days=65)
         filtered_codes = [s.code for s in filtered_stocks]
 
         with SessionLocal() as db_cache:
@@ -335,23 +335,28 @@ async def start_sync(
     return success(msg="同步任务已启动")
 
 
+class SyncRecentDaysRequest(BaseModel):
+    days: int = Field(default=10, ge=1, le=365, description="同步最近N天")
+
+
 @router.post("/start-recent-days")
 async def start_sync_recent_days(
+    request: SyncRecentDaysRequest,
     background_tasks: BackgroundTasks
 ):
-    """同步近10天数据，跳过排除列表，有则更新无则插入"""
+    """同步近N天数据，跳过排除列表，有则更新无则插入"""
     if sync_status["is_syncing"]:
         return error(code=1, msg="已有同步任务在进行中")
 
     today = datetime.now().date()
     end_date = today
-    start_date = today - timedelta(days=15)
+    start_date = today - timedelta(days=request.days + 5)
 
     start_date_str = start_date.strftime('%Y%m%d')
     end_date_str = end_date.strftime('%Y%m%d')
 
     background_tasks.add_task(run_sync_task, start_date_str, end_date_str, True)
-    return success(msg=f"近10天同步任务已启动（{start_date_str} 到 {end_date_str}）")
+    return success(msg=f"近{request.days}天同步任务已启动（{start_date_str} 到 {end_date_str}）")
 
 
 @router.post("/sync-basic-info")
@@ -414,3 +419,15 @@ async def remove_skipped_stock_api(request: RemoveSkippedStockRequest):
         return success(msg=f"已从跳过列表移除股票 {request.code}")
     else:
         return error(code=1, msg=f"股票 {request.code} 不在跳过列表中")
+
+
+@router.post("/repair-indicators")
+async def repair_indicators(
+    background_tasks: BackgroundTasks
+):
+    """修复所有股票的K线指标数据"""
+    if sync_status["is_syncing"]:
+        return error(code=1, msg="已有同步任务在进行中")
+
+    background_tasks.add_task(sync_service.run_repair_indicators)
+    return success(msg="指标修复任务已启动")

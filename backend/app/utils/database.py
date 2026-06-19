@@ -7,7 +7,6 @@ from app.utils.startup_checks import (
     repair_stock_kline_schema,
     collect_table_status,
 )
-from app.utils.data_migrations import repair_json_columns
 
 
 SQLALCHEMY_DATABASE_URL = settings.DATABASE_URL
@@ -47,7 +46,6 @@ def init_db():
 
     with engine.begin() as conn:
         duplicate_rows = repair_stock_kline_schema(conn)
-        repaired_json = repair_json_columns(conn)
         table_report = collect_table_status(conn)
 
     print("=" * 80)
@@ -58,7 +56,6 @@ def init_db():
         rows = info["rows"] if info["rows"] is not None else "N/A"
         print(f"[STARTUP CHECK] {table}: {status}, rows={rows}")
     print(f"[STARTUP CHECK] stock_kline duplicate rows removed: {duplicate_rows}")
-    print(f"[STARTUP CHECK] JSON-like columns repaired: {repaired_json}")
     print("[STARTUP CHECK] stock_kline indexes: uq_stock_kline_code_date ensured")
     print("[STARTUP CHECK] schema repair completed")
     print("=" * 80)

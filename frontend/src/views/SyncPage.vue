@@ -6,8 +6,14 @@
           <span>数据同步</span>
           <div>
             <el-button type="primary" @click="startSync" :disabled="syncing">开始同步</el-button>
-            <el-button type="success" @click="startSyncRecentDays" :disabled="syncing">同步近10天</el-button>
+            <div style="display: inline-flex; align-items: center; margin-left: 10px;">
+              <span style="margin-right: 5px; font-size: 14px;">同步近</span>
+              <el-input-number v-model="recentDays" :min="1" :max="365" size="small" style="width: 100px;" />
+              <span style="margin-left: 5px; margin-right: 10px; font-size: 14px;">天</span>
+              <el-button type="success" @click="startSyncRecentDays" :disabled="syncing">开始同步</el-button>
+            </div>
             <el-button type="warning" @click="startSyncBasicInfo" :disabled="syncing">同步基本信息</el-button>
+            <el-button type="info" @click="startRepairIndicators" :disabled="syncing">数据修复</el-button>
             <el-button type="danger" @click="cancelSync" :disabled="!syncing">取消同步</el-button>
           </div>
         </div>
@@ -151,6 +157,7 @@ const syncing = ref(false)
 const syncStatus = ref(null)
 const skippedStocks = ref([])
 const realtimeProgress = ref(null)
+const recentDays = ref(10)
 const today = new Date().toISOString().split('T')[0]
 const syncForm = ref({ startDate: '2024-01-01', endDate: today })
 let timer = null
@@ -165,7 +172,8 @@ const startSync = async () => {
   if (!syncForm.value.startDate || !syncForm.value.endDate) return ElMessage.error('请选择起始日期和结束日期')
   try { const res = await api.post('/sync/start', { start_date: syncForm.value.startDate, end_date: syncForm.value.endDate }); ElMessage.success(res.msg); syncing.value = true; realtimeProgress.value = null; startPolling() } catch (error) { console.error(error) }
 }
-const startSyncRecentDays = async () => { try { const res = await api.post('/sync/start-recent-days'); ElMessage.success(res.msg); syncing.value = true; realtimeProgress.value = null; startPolling() } catch (error) { console.error(error) } }
+const startSyncRecentDays = async () => { try { const res = await api.post('/sync/start-recent-days', { days: recentDays.value }); ElMessage.success(res.msg); syncing.value = true; realtimeProgress.value = null; startPolling() } catch (error) { console.error(error) } }
+const startRepairIndicators = async () => { try { const res = await api.post('/sync/repair-indicators'); ElMessage.success(res.msg); syncing.value = true; realtimeProgress.value = null; startPolling() } catch (error) { console.error(error) } }
 const startSyncBasicInfo = async () => { try { const res = await syncBasicInfo(); ElMessage.success(res.msg); syncing.value = true; realtimeProgress.value = null; startPolling() } catch (error) { console.error(error) } }
 const cancelSync = async () => { try { const res = await api.post('/sync/cancel'); ElMessage.success(res.msg) } catch (error) { console.error(error) } }
 const addOneToSkip = async (stock) => { try { await api.post('/sync/skipped-stocks/add', { stocks: [stock] }); ElMessage.success('已加入跳过列表'); await loadSkippedStocks() } catch (error) { console.error(error) } }
