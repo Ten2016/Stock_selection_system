@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Date, TIMESTAMP, DECIMAL, JSON, Index
+from sqlalchemy import Column, Integer, String, Date, TIMESTAMP, DECIMAL, JSON, Index, UniqueConstraint
 from sqlalchemy.sql import func
 
 from app.utils.database import Base
@@ -7,6 +7,7 @@ from app.utils.database import Base
 class StockKline(Base):
     __tablename__ = "stock_kline"
     __table_args__ = (
+        UniqueConstraint('stock_code', 'trade_date', name='uq_stock_kline_code_date'),
         Index('idx_stock_code_trade_date', 'stock_code', 'trade_date'),
     )
 

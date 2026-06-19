@@ -1,7 +1,7 @@
 import requests
 import pandas as pd
 from datetime import datetime, timedelta
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 import time
 import traceback
 import random
@@ -12,11 +12,43 @@ from app.models.stock import StockBasic
 from app.models.stock_kline import StockKline
 from app.models.sync import SyncRecord
 from app.services.indicator_service import calculate_all_indicators
-from sqlalchemy import and_
+from app.utils.sync_state import is_cancelled
+from app.utils.rate_limiter import RateLimiter
 
 
-REQUEST_DELAY_MIN = 0.1
-REQUEST_DELAY_MAX = 0.3
+# 腾讯 K 线 API 全局限流（在 HTTP 请求前 acquire）
+KLINE_API_RATE_PER_SECOND = 4.0
+_kline_rate_limiter = RateLimiter(KLINE_API_RATE_PER_SECOND)
+
+REQUEST_DELAY_MIN = 0.3
+REQUEST_DELAY_MAX = 0.6
+
+KLINE_UPSERT_SQL = """
+    INSERT INTO stock_kline (
+        stock_code, trade_date, open, high, low, close, volume, amount,
+        amplitude, change_pct, ma5, ma10, ma20, ma30, ma60, ma120,
+        boll_upper, boll_mid, boll_lower, dividend_info
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(stock_code, trade_date) DO UPDATE SET
+        open = excluded.open,
+        high = excluded.high,
+        low = excluded.low,
+        close = excluded.close,
+        volume = excluded.volume,
+        amount = excluded.amount,
+        amplitude = excluded.amplitude,
+        change_pct = excluded.change_pct,
+        ma5 = excluded.ma5,
+        ma10 = excluded.ma10,
+        ma20 = excluded.ma20,
+        ma30 = excluded.ma30,
+        ma60 = excluded.ma60,
+        ma120 = excluded.ma120,
+        boll_upper = excluded.boll_upper,
+        boll_mid = excluded.boll_mid,
+        boll_lower = excluded.boll_lower,
+        dividend_info = excluded.dividend_info
+"""
 
 
 def _get_stock_prefix(code: str) -> str:
@@ -24,6 +56,89 @@ def _get_stock_prefix(code: str) -> str:
         return 'sh'
     else:
         return 'sz'
+
+
+def _safe_float(val) -> Optional[float]:
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return None
+    return float(val)
+
+
+def _format_dividend_info(val) -> Optional[str]:
+    if val is None:
+        return None
+    if isinstance(val, dict):
+        return json.dumps(val, ensure_ascii=False)
+    return str(val)
+
+
+def _df_to_rows(stock_code: str, df: pd.DataFrame) -> List[tuple]:
+    rows = []
+    col_index = {name: idx for idx, name in enumerate(df.columns)}
+    values = df.values
+
+    def col(row, name):
+        idx = col_index.get(name)
+        if idx is None:
+            return None
+        val = row[idx]
+        if pd.isna(val):
+            return None
+        return val
+
+    for row in values:
+        amount = col(row, 'amount')
+        rows.append((
+            stock_code,
+            col(row, 'trade_date'),
+            _safe_float(col(row, 'open')),
+            _safe_float(col(row, 'high')),
+            _safe_float(col(row, 'low')),
+            _safe_float(col(row, 'close')),
+            _safe_float(col(row, 'volume')),
+            _safe_float(amount) / 10000 if amount is not None else None,
+            _safe_float(col(row, 'amplitude')),
+            _safe_float(col(row, 'change_pct')),
+            _safe_float(col(row, 'MA5')),
+            _safe_float(col(row, 'MA10')),
+            _safe_float(col(row, 'MA20')),
+            _safe_float(col(row, 'MA30')),
+            _safe_float(col(row, 'MA60')),
+            _safe_float(col(row, 'MA120')),
+            _safe_float(col(row, 'boll_upper')),
+            _safe_float(col(row, 'boll_mid')),
+            _safe_float(col(row, 'boll_lower')),
+            _format_dividend_info(col(row, 'dividend_info')),
+        ))
+    return rows
+
+
+def save_kline_batch(items: List[Tuple[str, pd.DataFrame]]) -> dict:
+    """批量 upsert K 线数据，单次事务提交。"""
+    if not items:
+        return {"row_count": 0, "stock_count": 0}
+
+    all_rows = []
+    for stock_code, df in items:
+        if df is None or len(df) == 0:
+            continue
+        all_rows.extend(_df_to_rows(stock_code, df))
+
+    if not all_rows:
+        return {"row_count": 0, "stock_count": 0}
+
+    with SessionLocal() as db:
+        raw_conn = db.connection().connection
+        raw_conn.executemany(KLINE_UPSERT_SQL, all_rows)
+        db.commit()
+
+    return {"row_count": len(all_rows), "stock_count": len(items)}
+
+
+def save_kline_data(db, stock_code: str, df) -> dict:
+    """单只股票 upsert（兼容旧调用，内部仍走批量 upsert）。"""
+    result = save_kline_batch([(stock_code, df)])
+    return {"insert_count": result["row_count"], "update_count": 0}
 
 
 def fetch_all_stocks_basic_info():
@@ -98,12 +213,12 @@ def fetch_all_stocks_basic_info():
                                 '市净率': pb_ratio,
                                 '今年涨跌幅': ytd_change_pct,
                             })
-                    except:
+                    except Exception:
                         continue
                 
                 if (i // batch_size) % 10 == 0:
                     print(f"[INFO] Fetched {i}/{len(all_codes)} codes, found {len(all_stocks)} stocks...")
-                    sleep_time = random.uniform(0.1, 0.3)
+                    sleep_time = random.uniform(REQUEST_DELAY_MIN, REQUEST_DELAY_MAX)
                     time.sleep(sleep_time)
             
             if not all_stocks:
@@ -156,31 +271,18 @@ def save_stocks_basic_info(df):
 
 
 def fetch_one_stock_history(stock_code: str, start_date: str, end_date: str, history_data: list = None):
-    """获取股票历史K线数据（不检查数据库，直接获取全量数据）
-    
-    Args:
-        stock_code: 股票代码
-        start_date: 开始日期 (YYYYMMDD)
-        end_date: 结束日期 (YYYYMMDD)
-        history_data: 预加载的历史数据列表 [{'trade_date': date, 'close': float}, ...]
-    """
-    from app.api.sync import sync_status
-    
-    print(f"[INFO] Fetching history for {stock_code} from {start_date} to {end_date}")
-    
+    """获取股票历史 K 线数据（请求前全局限流）。"""
     max_retries = 3
     retry_count = 0
     
     while retry_count < max_retries:
-        if sync_status.get("cancelled"):
-            print(f"\n[WARN] Fetch cancelled for {stock_code}")
+        if is_cancelled():
             return pd.DataFrame()
         
         try:
             prefix = _get_stock_prefix(stock_code)
             symbol = f"{prefix}{stock_code}"
             
-            # 统一日期格式为 YYYY-MM-DD（腾讯 API 要求）
             if '-' not in start_date:
                 start_date_clean = f"{start_date[:4]}-{start_date[4:6]}-{start_date[6:]}"
             else:
@@ -193,6 +295,7 @@ def fetch_one_stock_history(stock_code: str, start_date: str, end_date: str, his
             url = f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={symbol},day,{start_date_clean},{end_date_clean},1000,qfq"
             
             headers = {"Referer": "https://finance.qq.com"}
+            _kline_rate_limiter.acquire()
             response = requests.get(url, headers=headers, timeout=15)
             response.encoding = 'utf-8'
             
@@ -219,7 +322,6 @@ def fetch_one_stock_history(stock_code: str, start_date: str, end_date: str, his
             klines = stock_data.get('qfqday', stock_data.get('day', [])) if isinstance(stock_data, dict) else []
             
             if not klines:
-                print(f"[WARN] No data returned for {stock_code}, raw response: {str(data)[:200]}")
                 return pd.DataFrame()
             
             dividend_map = {}
@@ -246,29 +348,29 @@ def fetch_one_stock_history(stock_code: str, start_date: str, end_date: str, his
             
             df = df.sort_values('trade_date').reset_index(drop=True)
             
-            # 使用预加载的历史数据计算指标上下文
             if history_data:
-                # 构建历史数据 DataFrame（正序）
                 history_df = pd.DataFrame(history_data)
                 history_df['trade_date'] = pd.to_datetime(history_df['trade_date'])
                 
-                # 合并历史数据和新数据
-                combined_df = pd.concat([history_df[['trade_date', 'close']], df[['trade_date', 'close', 'open', 'high', 'low', 'volume', 'amount', 'dividend_info']]], ignore_index=True)
+                combined_df = pd.concat([
+                    history_df[['trade_date', 'close']],
+                    df[['trade_date', 'close', 'open', 'high', 'low', 'volume', 'amount', 'dividend_info']]
+                ], ignore_index=True)
                 
-                # 计算指标
-                combined_df['change_pct'] = ((combined_df['close'] - combined_df['close'].shift(1)) / combined_df['close'].shift(1)) * 100
+                combined_df['change_pct'] = (
+                    (combined_df['close'] - combined_df['close'].shift(1)) / combined_df['close'].shift(1)
+                ) * 100
                 combined_df['change_pct'] = combined_df['change_pct'].round(2)
                 combined_df['change_pct'] = combined_df['change_pct'].where(combined_df['change_pct'].notna(), None)
                 combined_df = calculate_all_indicators(combined_df)
                 
-                # 计算振幅
-                combined_df['amplitude'] = ((combined_df['high'] - combined_df['low']) / combined_df['close'].shift(1)) * 100
+                combined_df['amplitude'] = (
+                    (combined_df['high'] - combined_df['low']) / combined_df['close'].shift(1)
+                ) * 100
                 
-                # 只保留新数据的行
                 new_dates = set(df['trade_date'])
                 df = combined_df[combined_df['trade_date'].isin(new_dates)].reset_index(drop=True)
             else:
-                # 没有历史数据，直接计算
                 df['change_pct'] = ((df['close'] - df['close'].shift(1)) / df['close'].shift(1)) * 100
                 df['change_pct'] = df['change_pct'].round(2)
                 df['change_pct'] = df['change_pct'].where(df['change_pct'].notna(), None)
@@ -280,73 +382,15 @@ def fetch_one_stock_history(stock_code: str, start_date: str, end_date: str, his
         except Exception as e:
             retry_count += 1
             print(f"[ERROR] Failed to fetch {stock_code} (attempt {retry_count}/{max_retries}): {e}")
-            traceback.print_exc()
             
             if retry_count < max_retries:
                 wait_time = retry_count * 2
-                print(f"[INFO] Waiting {wait_time} seconds before retry...")
                 for _ in range(wait_time * 10):
-                    if sync_status.get("cancelled"):
-                        print(f"\n[WARN] Retry cancelled for {stock_code}")
+                    if is_cancelled():
                         return pd.DataFrame()
                     time.sleep(0.1)
             else:
-                print(f"[ERROR] Max retries reached for {stock_code}")
                 raise
-
-
-def save_kline_data(db, stock_code: str, df) -> dict:
-    """使用SQLite原生executemany批量插入，大幅提升写入速度"""
-    
-    trade_dates = df['trade_date'].tolist()
-    
-    # 获取底层SQLite连接
-    raw_conn = db.connection().connection
-    
-    # 先删除该股票在目标日期范围内的旧记录
-    placeholders = ','.join(['?' for _ in trade_dates])
-    raw_conn.execute(
-        f"DELETE FROM stock_kline WHERE stock_code = ? AND trade_date IN ({placeholders})",
-        [stock_code] + trade_dates
-    )
-    
-    # 构建批量插入参数列表
-    rows_to_insert = []
-    for _, row in df.iterrows():
-        rows_to_insert.append((
-            stock_code,
-            row['trade_date'],
-            float(row['open']),
-            float(row['high']),
-            float(row['low']),
-            float(row['close']),
-            float(row['volume']) if pd.notna(row.get('volume')) else None,
-            float(row['amount']) / 10000 if pd.notna(row.get('amount')) else None,
-            float(row['amplitude']) if pd.notna(row.get('amplitude')) else None,
-            float(row['change_pct']) if pd.notna(row.get('change_pct')) else None,
-            float(row['MA5']) if pd.notna(row.get('MA5')) else None,
-            float(row['MA10']) if pd.notna(row.get('MA10')) else None,
-            float(row['MA20']) if pd.notna(row.get('MA20')) else None,
-            float(row['MA30']) if pd.notna(row.get('MA30')) else None,
-            float(row['MA60']) if pd.notna(row.get('MA60')) else None,
-            float(row['MA120']) if pd.notna(row.get('MA120')) else None,
-            float(row['boll_upper']) if pd.notna(row.get('boll_upper')) else None,
-            float(row['boll_mid']) if pd.notna(row.get('boll_mid')) else None,
-            float(row['boll_lower']) if pd.notna(row.get('boll_lower')) else None,
-            str(row.get('dividend_info')) if row.get('dividend_info') else None,
-        ))
-    
-    # 使用executemany批量插入
-    raw_conn.executemany("""
-        INSERT INTO stock_kline 
-        (stock_code, trade_date, open, high, low, close, volume, amount, amplitude, change_pct, 
-         ma5, ma10, ma20, ma30, ma60, ma120, boll_upper, boll_mid, boll_lower, dividend_info)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, rows_to_insert)
-    
-    db.commit()
-    
-    return {"insert_count": len(df), "update_count": 0}
 
 
 def get_latest_sync_date() -> Optional[str]:
@@ -372,15 +416,21 @@ def get_sync_status() -> Dict[str, Any]:
                 "failed_stocks": json.loads(latest.failed_stocks) if latest.failed_stocks else [],
                 "no_data_stocks": json.loads(latest.no_data_stocks) if latest.no_data_stocks else [],
             }
-        return {"sync_date": None, "stock_count": 0, "status": "no_sync", "success_count": 0, "skipped_count": 0, "failed_count": 0, "no_data_count": 0, "failed_stocks": [], "no_data_stocks": []}
+        return {
+            "sync_date": None, "stock_count": 0, "status": "no_sync",
+            "success_count": 0, "skipped_count": 0, "failed_count": 0,
+            "no_data_count": 0, "failed_stocks": [], "no_data_stocks": [],
+        }
 
 
-def create_sync_record(sync_date: str, stock_count: int, success_count: int = 0, skipped_count: int = 0, failed_count: int = 0, no_data_count: int = 0, failed_stocks: list = None, no_data_stocks: list = None):
+def create_sync_record(
+    sync_date: str, stock_count: int, success_count: int = 0,
+    skipped_count: int = 0, failed_count: int = 0, no_data_count: int = 0,
+    failed_stocks: list = None, no_data_stocks: list = None,
+):
     with SessionLocal() as db:
-        # 兼容两种日期格式: YYYY-MM-DD 和 YYYYMMDD
         sync_date_clean = sync_date.replace('-', '')
         sync_date_obj = datetime.strptime(sync_date_clean, '%Y%m%d').date()
-        sync_date_str = sync_date_obj.strftime('%Y-%m-%d')
         
         record = db.query(SyncRecord).filter(SyncRecord.sync_date == sync_date_obj).first()
         if record:
@@ -417,7 +467,6 @@ def run_basic_info_sync():
     print("=" * 50)
     
     try:
-        # 获取所有股票基本信息
         df = fetch_all_stocks_basic_info()
         
         if df is None or len(df) == 0:
@@ -425,12 +474,9 @@ def run_basic_info_sync():
             return
         
         print(f"[INFO] Fetched {len(df)} stocks basic info")
-        
-        # 保存到数据库（不跳过任何股票）
         save_stocks_basic_info(df)
         print(f"[DONE] Basic info sync completed, saved {len(df)} stocks")
         
     except Exception as e:
         print(f"[FATAL ERROR] Basic info sync failed: {e}")
-        import traceback
         traceback.print_exc()
