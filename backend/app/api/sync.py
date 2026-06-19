@@ -23,7 +23,7 @@ class SyncRequest(BaseModel):
     end_date: str
 
 
-def process_single_stock(stock, start_date, end_date, skipped_codes, skip_check=True):
+def process_single_stock(stock, start_date, end_date, skipped_codes, history_cache, skip_check=True):
     """处理单个股票的函数，用于并发执行
     
     Args:
@@ -31,6 +31,7 @@ def process_single_stock(stock, start_date, end_date, skipped_codes, skip_check=
         start_date: 开始日期
         end_date: 结束日期
         skipped_codes: 跳过列表
+        history_cache: 预加载的历史数据缓存
         skip_check: 是否检查跳过列表（默认True）
     """
     stock_code = stock.code
@@ -52,9 +53,12 @@ def process_single_stock(stock, start_date, end_date, skipped_codes, skip_check=
                 result["reason"] = "在跳过列表中"
                 return result
         
+        # 获取该股票的历史数据（从缓存）
+        stock_history = history_cache.get(stock_code, [])
+        
         # 抓取该时间段内所有数据（不再检查数据库已有数据）
         from app.services import sync_service
-        kline_data = sync_service.fetch_one_stock_history(stock_code, start_date, end_date)
+        kline_data = sync_service.fetch_one_stock_history(stock_code, start_date, end_date, stock_history)
         
         if len(kline_data) > 0:
             result["status"] = "success"
@@ -63,8 +67,8 @@ def process_single_stock(stock, start_date, end_date, skipped_codes, skip_check=
             result["status"] = "no_data"
             result["reason"] = "no data available"
         
-        # 每个请求完成后，在工作线程中随机等待100-300毫秒
-        sleep_time = random.uniform(0.1, 0.3)
+        # 每个请求完成后，在工作线程中随机等待50-150毫秒
+        sleep_time = random.uniform(0.05, 0.15)
         time.sleep(sleep_time)
         
     except Exception as e:
@@ -76,13 +80,14 @@ def process_single_stock(stock, start_date, end_date, skipped_codes, skip_check=
     return result
 
 
-def run_sync_task(start_date: str, end_date: str, skip_check: bool = True):
+def run_sync_task(start_date: str, end_date: str, skip_check: bool = True, history_cache: dict = None):
     """运行同步任务
     
     Args:
         start_date: 开始日期
         end_date: 结束日期
         skip_check: 是否检查跳过列表（默认True）
+        history_cache: 预加载的历史数据缓存
     """
     global sync_status
     # 在函数最开始初始化所有变量，避免作用域问题
@@ -114,12 +119,15 @@ def run_sync_task(start_date: str, end_date: str, skip_check: bool = True):
             all_stocks, _ = get_stock_list(db_list, skip=0, limit=10000)
         
         # 筛选股票并按市值从大到小排序
-        filtered_stocks = [s for s in all_stocks if s.code.startswith(('0', '3', '6'))]
+        MIN_MARKET_CAP = 100  # 跳过市值小于100亿的股票（单位：亿）
+        filtered_stocks = [s for s in all_stocks if s.code.startswith(('0', '3', '6')) and s.total_cap and s.total_cap >= MIN_MARKET_CAP]
+        skipped_small_cap = len([s for s in all_stocks if s.code.startswith(('0', '3', '6')) and (not s.total_cap or s.total_cap < MIN_MARKET_CAP)])
         # 确保按市值降序排序
         filtered_stocks.sort(key=lambda x: x.total_cap if x.total_cap else 0, reverse=True)
         
         total = len(filtered_stocks)
         print(f"[INFO] Loaded {total} stocks (filtered from {len(all_stocks)}), sorted by market cap descending")
+        print(f"[INFO] Skipped {skipped_small_cap} stocks with market cap < {MIN_MARKET_CAP}亿")
         
         sync_status["progress"] = 20
         
@@ -142,19 +150,44 @@ def run_sync_task(start_date: str, end_date: str, skip_check: bool = True):
         skipped_codes = load_skipped_codes()
         print(f"[INFO] Loaded {len(skipped_codes)} stocks from skip list")
         
+        # 预加载所有股票的历史数据到内存缓存（用于指标计算上下文）
+        print("\n[STEP 1.5/3] Pre-loading historical data for indicator calculation...")
+        from app.models.stock_kline import StockKline
+        # 兼容两种日期格式: YYYY-MM-DD 和 YYYYMMDD
+        start_date_clean = start_date.replace('-', '')
+        sync_start_date_obj = datetime.strptime(start_date_clean, "%Y%m%d").date()
+        history_start_date_obj = sync_start_date_obj - timedelta(days=120)
+        
+        local_history_cache = {}
+        with SessionLocal() as db_cache:
+            history_klines = db_cache.query(StockKline).filter(
+                StockKline.trade_date >= history_start_date_obj,
+                StockKline.trade_date < sync_start_date_obj
+            ).order_by(StockKline.stock_code.asc(), StockKline.trade_date.asc()).all()
+            
+            for k in history_klines:
+                if k.stock_code not in local_history_cache:
+                    local_history_cache[k.stock_code] = []
+                local_history_cache[k.stock_code].append({'trade_date': k.trade_date, 'close': float(k.close)})
+        
+        print(f"[INFO] Pre-loaded history for {len(local_history_cache)} stocks", flush=True)
+        print("=" * 50, flush=True)
+        print("[STEP 2/3] Starting K-line sync (preloading complete)...", flush=True)
+        print("=" * 50, flush=True)
+        
         # 使用线程池并发处理
         from app.services import sync_service
-        max_workers = 100
+        max_workers = 10  # 降低并发数，避免腾讯 API 限流（501 错误）
         
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             # 提交所有任务
             future_to_stock = {
-                executor.submit(process_single_stock, stock, start_date, end_date, skipped_codes, skip_check): stock 
+                executor.submit(process_single_stock, stock, start_date, end_date, skipped_codes, local_history_cache, skip_check): stock 
                 for stock in filtered_stocks
             }
             
-            # 批量保存数据（每10个成功结果保存一次）
-            batch_save_size = 10
+            # 批量保存数据（每50个成功结果保存一次，减少SQLite写入锁竞争）
+            batch_save_size = 50
             batch_results = []
             
             # 处理完成的任务
@@ -183,10 +216,13 @@ def run_sync_task(start_date: str, end_date: str, skip_check: bool = True):
                             
                             # 批量保存
                             if len(batch_results) >= batch_save_size:
+                                import time as _time
+                                _t0 = _time.time()
                                 with SessionLocal() as db:
                                     for code, data in batch_results:
                                         sync_service.save_kline_data(db, code, data)
-                                print(f"[INFO] Batch saved {len(batch_results)} stocks")
+                                _elapsed = _time.time() - _t0
+                                print(f"[INFO] Batch saved {len(batch_results)} stocks in {_elapsed:.2f}s")
                                 batch_results.clear()
                             
                         elif result["status"] == "skipped":
@@ -220,10 +256,13 @@ def run_sync_task(start_date: str, end_date: str, skip_check: bool = True):
             
             # 保存剩余的批量结果
             if batch_results:
+                import time as _time
+                _t0 = _time.time()
                 with SessionLocal() as db:
                     for code, data in batch_results:
                         sync_service.save_kline_data(db, code, data)
-                print(f"[INFO] Final batch saved {len(batch_results)} stocks")
+                _elapsed = _time.time() - _t0
+                print(f"[INFO] Final batch saved {len(batch_results)} stocks in {_elapsed:.2f}s")
         
         print("\n[STEP 3/3] Saving sync record...")
         sync_service.create_sync_record(end_date, total, success_count, skipped_count, len(failed_stocks), len(no_data_stocks), failed_stocks, no_data_stocks)
@@ -325,8 +364,8 @@ async def start_sync_recent_days(
     end_date = today
     start_date = today - timedelta(days=15)
     
-    start_date_str = start_date.strftime('%Y-%m-%d')
-    end_date_str = end_date.strftime('%Y-%m-%d')
+    start_date_str = start_date.strftime('%Y%m%d')
+    end_date_str = end_date.strftime('%Y%m%d')
     
     background_tasks.add_task(run_sync_task, start_date_str, end_date_str, True)
     return success(msg=f"近10天同步任务已启动（{start_date_str} 到 {end_date_str}）")

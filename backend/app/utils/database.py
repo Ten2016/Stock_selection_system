@@ -30,7 +30,7 @@ def get_db():
 def init_db():
     os.makedirs(os.path.dirname(settings.DATABASE_URL.replace("sqlite:///", "")), exist_ok=True)
     Base.metadata.create_all(bind=engine)
-    
+
     with engine.connect() as conn:
         try:
             conn.execute(text("ALTER TABLE stock_kline ADD COLUMN dividend_info JSON"))
@@ -38,5 +38,5 @@ def init_db():
             print("Added dividend_info column to stock_kline table.")
         except Exception:
             pass
-    
+
     print("Database initialized successfully.")

@@ -155,8 +155,15 @@ def save_stocks_basic_info(df):
         db.commit()
 
 
-def fetch_one_stock_history(stock_code: str, start_date: str, end_date: str):
-    """获取股票历史K线数据（不检查数据库，直接获取全量数据）"""
+def fetch_one_stock_history(stock_code: str, start_date: str, end_date: str, history_data: list = None):
+    """获取股票历史K线数据（不检查数据库，直接获取全量数据）
+    
+    Args:
+        stock_code: 股票代码
+        start_date: 开始日期 (YYYYMMDD)
+        end_date: 结束日期 (YYYYMMDD)
+        history_data: 预加载的历史数据列表 [{'trade_date': date, 'close': float}, ...]
+    """
     from app.api.sync import sync_status
     
     print(f"[INFO] Fetching history for {stock_code} from {start_date} to {end_date}")
@@ -173,7 +180,17 @@ def fetch_one_stock_history(stock_code: str, start_date: str, end_date: str):
             prefix = _get_stock_prefix(stock_code)
             symbol = f"{prefix}{stock_code}"
             
-            url = f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={symbol},day,{start_date},{end_date},1000,qfq"
+            # 统一日期格式为 YYYY-MM-DD（腾讯 API 要求）
+            if '-' not in start_date:
+                start_date_clean = f"{start_date[:4]}-{start_date[4:6]}-{start_date[6:]}"
+            else:
+                start_date_clean = start_date
+            if '-' not in end_date:
+                end_date_clean = f"{end_date[:4]}-{end_date[4:6]}-{end_date[6:]}"
+            else:
+                end_date_clean = end_date
+            
+            url = f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={symbol},day,{start_date_clean},{end_date_clean},1000,qfq"
             
             headers = {"Referer": "https://finance.qq.com"}
             response = requests.get(url, headers=headers, timeout=15)
@@ -202,7 +219,7 @@ def fetch_one_stock_history(stock_code: str, start_date: str, end_date: str):
             klines = stock_data.get('qfqday', stock_data.get('day', [])) if isinstance(stock_data, dict) else []
             
             if not klines:
-                print(f"[WARN] No data returned for {stock_code}")
+                print(f"[WARN] No data returned for {stock_code}, raw response: {str(data)[:200]}")
                 return pd.DataFrame()
             
             dividend_map = {}
@@ -229,51 +246,34 @@ def fetch_one_stock_history(stock_code: str, start_date: str, end_date: str):
             
             df = df.sort_values('trade_date').reset_index(drop=True)
             
-            # 从数据库加载历史数据作为指标计算上下文
-            db = SessionLocal()
-            try:
-                # 计算需要加载的历史起始日期（同步起始日前120天）
-                sync_start_date = df['trade_date'].min()
-                history_start_date = sync_start_date - timedelta(days=120)
+            # 使用预加载的历史数据计算指标上下文
+            if history_data:
+                # 构建历史数据 DataFrame（正序）
+                history_df = pd.DataFrame(history_data)
+                history_df['trade_date'] = pd.to_datetime(history_df['trade_date'])
                 
-                history_klines = db.query(StockKline).filter(
-                    StockKline.stock_code == stock_code,
-                    StockKline.trade_date >= history_start_date,
-                    StockKline.trade_date < sync_start_date
-                ).order_by(StockKline.trade_date.asc()).all()
+                # 合并历史数据和新数据
+                combined_df = pd.concat([history_df[['trade_date', 'close']], df[['trade_date', 'close', 'open', 'high', 'low', 'volume', 'amount', 'dividend_info']]], ignore_index=True)
                 
-                if history_klines:
-                    # 构建历史数据 DataFrame（正序）
-                    history_df = pd.DataFrame([{
-                        'trade_date': k.trade_date,
-                        'close': k.close,
-                    } for k in reversed(history_klines)])
-                    history_df['trade_date'] = pd.to_datetime(history_df['trade_date'])
-                    
-                    # 合并历史数据和新数据
-                    combined_df = pd.concat([history_df[['trade_date', 'close']], df[['trade_date', 'close', 'open', 'high', 'low', 'volume', 'amount', 'dividend_info']]], ignore_index=True)
-                    
-                    # 计算指标
-                    combined_df['change_pct'] = ((combined_df['close'] - combined_df['close'].shift(1)) / combined_df['close'].shift(1)) * 100
-                    combined_df['change_pct'] = combined_df['change_pct'].round(2)
-                    combined_df['change_pct'] = combined_df['change_pct'].where(combined_df['change_pct'].notna(), None)
-                    combined_df = calculate_all_indicators(combined_df)
-                    
-                    # 计算振幅
-                    combined_df['amplitude'] = ((combined_df['high'] - combined_df['low']) / combined_df['close'].shift(1)) * 100
-                    
-                    # 只保留新数据的行
-                    new_dates = set(df['trade_date'])
-                    df = combined_df[combined_df['trade_date'].isin(new_dates)].reset_index(drop=True)
-                else:
-                    # 没有历史数据，直接计算
-                    df['change_pct'] = ((df['close'] - df['close'].shift(1)) / df['close'].shift(1)) * 100
-                    df['change_pct'] = df['change_pct'].round(2)
-                    df['change_pct'] = df['change_pct'].where(df['change_pct'].notna(), None)
-                    df = calculate_all_indicators(df)
-                    df['amplitude'] = ((df['high'] - df['low']) / df['close'].shift(1)) * 100
-            finally:
-                db.close()
+                # 计算指标
+                combined_df['change_pct'] = ((combined_df['close'] - combined_df['close'].shift(1)) / combined_df['close'].shift(1)) * 100
+                combined_df['change_pct'] = combined_df['change_pct'].round(2)
+                combined_df['change_pct'] = combined_df['change_pct'].where(combined_df['change_pct'].notna(), None)
+                combined_df = calculate_all_indicators(combined_df)
+                
+                # 计算振幅
+                combined_df['amplitude'] = ((combined_df['high'] - combined_df['low']) / combined_df['close'].shift(1)) * 100
+                
+                # 只保留新数据的行
+                new_dates = set(df['trade_date'])
+                df = combined_df[combined_df['trade_date'].isin(new_dates)].reset_index(drop=True)
+            else:
+                # 没有历史数据，直接计算
+                df['change_pct'] = ((df['close'] - df['close'].shift(1)) / df['close'].shift(1)) * 100
+                df['change_pct'] = df['change_pct'].round(2)
+                df['change_pct'] = df['change_pct'].where(df['change_pct'].notna(), None)
+                df = calculate_all_indicators(df)
+                df['amplitude'] = ((df['high'] - df['low']) / df['close'].shift(1)) * 100
             
             return df
             
@@ -296,61 +296,57 @@ def fetch_one_stock_history(stock_code: str, start_date: str, end_date: str):
 
 
 def save_kline_data(db, stock_code: str, df) -> dict:
-    insert_count = 0
-    update_count = 0
+    """使用SQLite原生executemany批量插入，大幅提升写入速度"""
     
+    trade_dates = df['trade_date'].tolist()
+    
+    # 获取底层SQLite连接
+    raw_conn = db.connection().connection
+    
+    # 先删除该股票在目标日期范围内的旧记录
+    placeholders = ','.join(['?' for _ in trade_dates])
+    raw_conn.execute(
+        f"DELETE FROM stock_kline WHERE stock_code = ? AND trade_date IN ({placeholders})",
+        [stock_code] + trade_dates
+    )
+    
+    # 构建批量插入参数列表
+    rows_to_insert = []
     for _, row in df.iterrows():
-        kline = StockKline(
-            stock_code=stock_code,
-            trade_date=row['trade_date'],
-            open=float(row['open']),
-            high=float(row['high']),
-            low=float(row['low']),
-            close=float(row['close']),
-            volume=float(row['volume']) if pd.notna(row.get('volume')) else None,
-            amount=float(row['amount']) / 10000 if pd.notna(row.get('amount')) else None,
-            amplitude=float(row['amplitude']) if pd.notna(row.get('amplitude')) else None,
-            change_pct=float(row['change_pct']) if pd.notna(row.get('change_pct')) else None,
-            ma5=float(row['MA5']) if pd.notna(row.get('MA5')) else None,
-            ma10=float(row['MA10']) if pd.notna(row.get('MA10')) else None,
-            ma20=float(row['MA20']) if pd.notna(row.get('MA20')) else None,
-            ma30=float(row['MA30']) if pd.notna(row.get('MA30')) else None,
-            ma60=float(row['MA60']) if pd.notna(row.get('MA60')) else None,
-            ma120=float(row['MA120']) if pd.notna(row.get('MA120')) else None,
-            boll_upper=float(row['boll_upper']) if pd.notna(row.get('boll_upper')) else None,
-            boll_mid=float(row['boll_mid']) if pd.notna(row.get('boll_mid')) else None,
-            boll_lower=float(row['boll_lower']) if pd.notna(row.get('boll_lower')) else None,
-            dividend_info=row.get('dividend_info'),
-        )
-        existing = db.query(StockKline).filter(
-            and_(StockKline.stock_code == stock_code, StockKline.trade_date == row['trade_date'])
-        ).first()
-        if existing:
-            existing.open = kline.open
-            existing.high = kline.high
-            existing.low = kline.low
-            existing.close = kline.close
-            existing.volume = kline.volume
-            existing.amount = kline.amount
-            existing.amplitude = kline.amplitude
-            existing.change_pct = kline.change_pct
-            existing.ma5 = kline.ma5
-            existing.ma10 = kline.ma10
-            existing.ma20 = kline.ma20
-            existing.ma30 = kline.ma30
-            existing.ma60 = kline.ma60
-            existing.ma120 = kline.ma120
-            existing.boll_upper = kline.boll_upper
-            existing.boll_mid = kline.boll_mid
-            existing.boll_lower = kline.boll_lower
-            existing.dividend_info = kline.dividend_info
-            update_count += 1
-        else:
-            db.add(kline)
-            insert_count += 1
+        rows_to_insert.append((
+            stock_code,
+            row['trade_date'],
+            float(row['open']),
+            float(row['high']),
+            float(row['low']),
+            float(row['close']),
+            float(row['volume']) if pd.notna(row.get('volume')) else None,
+            float(row['amount']) / 10000 if pd.notna(row.get('amount')) else None,
+            float(row['amplitude']) if pd.notna(row.get('amplitude')) else None,
+            float(row['change_pct']) if pd.notna(row.get('change_pct')) else None,
+            float(row['MA5']) if pd.notna(row.get('MA5')) else None,
+            float(row['MA10']) if pd.notna(row.get('MA10')) else None,
+            float(row['MA20']) if pd.notna(row.get('MA20')) else None,
+            float(row['MA30']) if pd.notna(row.get('MA30')) else None,
+            float(row['MA60']) if pd.notna(row.get('MA60')) else None,
+            float(row['MA120']) if pd.notna(row.get('MA120')) else None,
+            float(row['boll_upper']) if pd.notna(row.get('boll_upper')) else None,
+            float(row['boll_mid']) if pd.notna(row.get('boll_mid')) else None,
+            float(row['boll_lower']) if pd.notna(row.get('boll_lower')) else None,
+            str(row.get('dividend_info')) if row.get('dividend_info') else None,
+        ))
+    
+    # 使用executemany批量插入
+    raw_conn.executemany("""
+        INSERT INTO stock_kline 
+        (stock_code, trade_date, open, high, low, close, volume, amount, amplitude, change_pct, 
+         ma5, ma10, ma20, ma30, ma60, ma120, boll_upper, boll_mid, boll_lower, dividend_info)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, rows_to_insert)
+    
     db.commit()
     
-    return {"insert_count": insert_count, "update_count": update_count}
+    return {"insert_count": len(df), "update_count": 0}
 
 
 def get_latest_sync_date() -> Optional[str]:
@@ -381,7 +377,12 @@ def get_sync_status() -> Dict[str, Any]:
 
 def create_sync_record(sync_date: str, stock_count: int, success_count: int = 0, skipped_count: int = 0, failed_count: int = 0, no_data_count: int = 0, failed_stocks: list = None, no_data_stocks: list = None):
     with SessionLocal() as db:
-        record = db.query(SyncRecord).filter(SyncRecord.sync_date == sync_date).first()
+        # 兼容两种日期格式: YYYY-MM-DD 和 YYYYMMDD
+        sync_date_clean = sync_date.replace('-', '')
+        sync_date_obj = datetime.strptime(sync_date_clean, '%Y%m%d').date()
+        sync_date_str = sync_date_obj.strftime('%Y-%m-%d')
+        
+        record = db.query(SyncRecord).filter(SyncRecord.sync_date == sync_date_obj).first()
         if record:
             record.stock_count = stock_count
             record.status = "success"
@@ -394,7 +395,7 @@ def create_sync_record(sync_date: str, stock_count: int, success_count: int = 0,
             record.no_data_stocks = json.dumps(no_data_stocks) if no_data_stocks else None
         else:
             record = SyncRecord(
-                sync_date=datetime.strptime(sync_date, '%Y-%m-%d').date(),
+                sync_date=sync_date_obj,
                 stock_count=stock_count,
                 status="success",
                 end_time=datetime.now(),
