@@ -55,6 +55,18 @@
           </el-form-item>
         </template>
         
+        <!-- above_ma60 策略参数 -->
+        <template v-if="form.strategy === 'above_ma60'">
+          <el-form-item label="最近">
+            <el-input-number v-model="form.yDays" :min="5" :max="200" style="width: 120px;" />
+            <span style="margin-left: 8px;">天内</span>
+          </el-form-item>
+          <el-form-item label="站上60日均线">
+            <el-input-number v-model="form.zDays" :min="1" :max="100" style="width: 120px;" />
+            <span style="margin-left: 8px;">天</span>
+          </el-form-item>
+        </template>
+        
         <el-form-item>
           <el-button type="primary" :loading="loading" @click="runStrategy">
             运行策略
@@ -113,6 +125,25 @@
               </div>
               <div style="margin-bottom: 8px;">
                 <el-tag size="small" type="info" style="margin-right: 4px;" v-for="(date, idx) in row.result.falling_dates" :key="idx">
+                  {{ date }}
+                </el-tag>
+              </div>
+              <div style="font-size: 12px; color: #909399;">
+                {{ row.result.strategy }}
+              </div>
+            </div>
+          </template>
+          
+          <!-- above_ma60 策略结果 -->
+          <template #default="{ row }" v-if="form.strategy === 'above_ma60'">
+            <div v-if="row.result">
+              <div style="margin-bottom: 8px;">
+                <el-tag size="small" type="success">
+                  站上60日线：{{ row.result.above_count }} 天
+                </el-tag>
+              </div>
+              <div style="margin-bottom: 8px;">
+                <el-tag size="small" type="info" style="margin-right: 4px;" v-for="(date, idx) in row.result.above_ma60_dates" :key="idx">
                   {{ date }}
                 </el-tag>
               </div>
@@ -199,6 +230,8 @@ const onStrategyChange = () => {
     form.value.xDays = 30; form.value.yDays = 10; form.value.zDays = 2
   } else if (form.value.strategy === 'rise_then_fall') {
     form.value.xDays = 30; form.value.yPct = 5.0; form.value.zDays = 3
+  } else if (form.value.strategy === 'above_ma60') {
+    form.value.yDays = 20; form.value.zDays = 10
   }
   results.value = []; totalCount.value = 0; hasRun.value = false; loadLatestResult(form.value.strategy)
 }

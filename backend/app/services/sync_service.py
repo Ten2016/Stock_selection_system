@@ -12,7 +12,7 @@ from app.models.stock import StockBasic
 from app.models.stock_kline import StockKline
 from app.models.sync import SyncRecord
 from app.services.indicator_service import calculate_all_indicators
-from app.utils.sync_state import is_cancelled
+from app.utils.sync_state import is_cancelled, begin_sync, end_sync, update_counts, sync_status
 from app.utils.rate_limiter import RateLimiter
 
 
@@ -538,6 +538,8 @@ def run_repair_indicators():
                 df['trade_date'] = pd.to_datetime(df['trade_date']).dt.date
                 df = df.sort_values('trade_date').reset_index(drop=True)
 
+                record_count = len(df)
+
                 # 重新计算指标
                 df['amount'] = df['volume'] * df['close'] / 100
                 df['change_pct'] = ((df['close'] - df['close'].shift(1)) / df['close'].shift(1)) * 100
@@ -550,10 +552,9 @@ def run_repair_indicators():
                 save_kline_batch([(code, df)])
                 repaired += 1
 
-                if (idx + 1) % 100 == 0 or idx + 1 == total:
-                    print(f"[INFO] Repaired {idx + 1}/{total} stocks")
-                    sync_status["progress"] = 20 + int(((idx + 1) / total) * 70) if total else 100
-                    update_counts(idx + 1, 0, [], [], sync_status["progress"])
+                print(f"[OK] [{idx + 1}/{total}] {code} repaired {record_count} records")
+                sync_status["progress"] = 20 + int(((idx + 1) / total) * 70) if total else 100
+                update_counts(idx + 1, 0, [], [], sync_status["progress"])
 
             print(f"\n[DONE] Repair completed! Repaired {repaired} stocks")
 

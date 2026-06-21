@@ -186,6 +186,63 @@ def check_strategy_rise_then_fall(
     return None
 
 
+def check_strategy_above_ma60(
+    data: List[StockKline],
+    y_days: int = 20,
+    z_days: int = 10
+) -> Optional[dict]:
+    """
+    检查是否满足策略：
+    - 最近y天内，有z天收盘价站上60日均线
+    
+    :param data: 股票K线数据（按日期倒序排列）
+    :param y_days: 最近y天内
+    :param z_days: 有z天站上60日均线
+    :return: 如果满足条件返回策略信息，否则返回None
+    """
+    if len(data) < y_days + 60:
+        return None
+    
+    # 转换为正序（索引0是最老的日期，索引-1是最新的日期）
+    sorted_data = sorted(data, key=lambda x: x.trade_date)
+    
+    # 获取最近y天的数据
+    latest_idx = len(sorted_data) - 1
+    start_idx = max(0, latest_idx - y_days + 1)
+    
+    # 统计站上60日均线的天数
+    above_ma60_dates = []
+    above_ma60_days = []
+    
+    for i in range(start_idx, latest_idx + 1):
+        day = sorted_data[i]
+        if (day.close is not None and day.ma60 is not None and 
+            day.close >= day.ma60):
+            above_ma60_dates.append(day.trade_date.strftime('%Y-%m-%d'))
+            above_ma60_days.append(day)
+    
+    # 检查是否满足z天
+    if len(above_ma60_dates) >= z_days:
+        strategy_name = f'最近 {y_days} 天内有 {z_days} 天站上 60 日均线'
+        
+        result = {
+            'strategy': strategy_name,
+            'above_ma60_dates': above_ma60_dates,
+            'above_count': len(above_ma60_dates),
+            'details': {}
+        }
+        
+        # 添加详细信息（最多显示前10天）
+        for idx, day in enumerate(above_ma60_days[:10]):
+            result['details'][f'day{idx + 1}_date'] = day.trade_date.strftime('%Y-%m-%d')
+            result['details'][f'day{idx + 1}_close'] = day.close
+            result['details'][f'day{idx + 1}_ma60'] = day.ma60
+        
+        return result
+    
+    return None
+
+
 def run_strategy_for_stock(
     db: Session,
     stock: StockBasic,
@@ -228,6 +285,15 @@ def run_strategy_for_stock(
             }
     elif strategy_name == 'rise_then_fall':
         result = check_strategy_rise_then_fall(data, x_days, y_pct, z_days)
+        if result:
+            return {
+                'code': stock.code,
+                'name': stock.name,
+                'total_cap': stock.total_cap,
+                'result': result
+            }
+    elif strategy_name == 'above_ma60':
+        result = check_strategy_above_ma60(data, y_days, z_days)
         if result:
             return {
                 'code': stock.code,
@@ -304,5 +370,10 @@ def get_available_strategies() -> List[dict]:
             'name': 'rise_then_fall',
             'display_name': '大涨后连续下跌',
             'description': '针对总市值大于p亿的股票，从当前日期往回扫描最多x天，找到第一个满足当天收盘涨幅大于y%且之后连续z天都是下跌的日期'
+        },
+        {
+            'name': 'above_ma60',
+            'display_name': '站上60日均线',
+            'description': '针对总市值大于x亿的股票，在最近y天内，有z天收盘价站上60日均线'
         }
     ]
