@@ -351,6 +351,9 @@ def run_strategy(
         if (idx + 1) % 100 == 0 or idx + 1 == total_count:
             print(f"已处理 {idx + 1}/{total_count} 股票，找到 {len(results)} 个符合条件的")
     
+    # 按总市值倒序排列
+    results.sort(key=lambda x: float(x.get('total_cap') or 0), reverse=True)
+    
     return results
 
 
