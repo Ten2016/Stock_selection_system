@@ -32,6 +32,9 @@ class StockKline(Base):
     boll_upper = Column(DECIMAL(10, 2))
     boll_mid = Column(DECIMAL(10, 2))
     boll_lower = Column(DECIMAL(10, 2))
+    dif = Column(DECIMAL(10, 4))
+    dea = Column(DECIMAL(10, 4))
+    macd = Column(DECIMAL(10, 4))
     dividend_info = Column(LenientJSON)
     created_at = Column(TIMESTAMP, server_default=func.now())
 
@@ -56,5 +59,8 @@ class StockKline(Base):
             "boll_upper": float(self.boll_upper) if self.boll_upper else None,
             "boll_mid": float(self.boll_mid) if self.boll_mid else None,
             "boll_lower": float(self.boll_lower) if self.boll_lower else None,
+            "dif": float(self.dif) if self.dif else None,
+            "dea": float(self.dea) if self.dea else None,
+            "macd": float(self.macd) if self.macd else None,
             "dividend_info": self.dividend_info,
         }

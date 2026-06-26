@@ -4,7 +4,6 @@ from sqlalchemy.orm import sessionmaker, declarative_base
 from app.core.config import settings
 from app.utils.startup_checks import (
     ensure_sqlite_database_path,
-    repair_stock_kline_schema,
     collect_table_status,
 )
 
@@ -45,18 +44,15 @@ def init_db():
     Base.metadata.create_all(bind=engine)
 
     with engine.begin() as conn:
-        duplicate_rows = repair_stock_kline_schema(conn)
         table_report = collect_table_status(conn)
 
     print("=" * 80)
-    print("[STARTUP CHECK] Database and schema self-check")
+    print("[STARTUP CHECK] Database self-check")
     print(f"[STARTUP CHECK] Database URL: {settings.DATABASE_URL}")
     for table, info in table_report.items():
         status = "OK" if info["exists"] else "MISSING"
         rows = info["rows"] if info["rows"] is not None else "N/A"
         print(f"[STARTUP CHECK] {table}: {status}, rows={rows}")
-    print(f"[STARTUP CHECK] stock_kline duplicate rows removed: {duplicate_rows}")
-    print("[STARTUP CHECK] stock_kline indexes: uq_stock_kline_code_date ensured")
-    print("[STARTUP CHECK] schema repair completed")
+    print("[STARTUP CHECK] completed")
     print("=" * 80)
 

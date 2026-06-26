@@ -183,7 +183,7 @@ def run_sync_task(start_date: str, end_date: str, skip_check: bool = True, histo
         print("\n[STEP 1.5/3] Pre-loading historical data for indicator calculation...")
         start_date_clean = start_date.replace('-', '')
         sync_start_date_obj = datetime.strptime(start_date_clean, "%Y%m%d").date()
-        history_start_date_obj = sync_start_date_obj - timedelta(days=65)
+        history_start_date_obj = sync_start_date_obj - timedelta(days=120)
         filtered_codes = [s.code for s in filtered_stocks]
 
         with SessionLocal() as db_cache:

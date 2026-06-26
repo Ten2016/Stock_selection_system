@@ -89,6 +89,19 @@
             <div v-if="currentData.boll_lower != null" style="margin-bottom: 8px;">
               <span style="color:#ea7ccc;">●</span> 布林下轨: {{ toFixed(currentData.boll_lower) }}
             </div>
+            <div style="margin-top: 12px; padding-top: 8px; border-top: 1px solid #eee;"></div>
+            <div style="margin-bottom: 8px; font-weight: bold; font-size: 13px;">MACD (12,26,9)</div>
+            <div v-if="currentData.dif != null" style="margin-bottom: 8px;">
+              <span style="color:#ffffff; background:#333; padding:0 4px; border-radius:2px;">DIF</span>
+              <span style="margin-left: 8px;">{{ toFixed(currentData.dif, 4) }}</span>
+            </div>
+            <div v-if="currentData.dea != null" style="margin-bottom: 8px;">
+              <span style="color:#ffeb3b;">●</span> DEA: {{ toFixed(currentData.dea, 4) }}
+            </div>
+            <div v-if="currentData.macd != null" style="margin-bottom: 8px;">
+              <span :style="{color: currentData.macd >= 0 ? '#ef5350' : '#26a69a'}">●</span>
+              MACD: {{ toFixed(currentData.macd, 4) }}
+            </div>
           </div>
         </div>
       </el-card>
@@ -208,12 +221,14 @@ const renderChart = (data) => {
   const bollUpper = data.map(item => item.boll_upper)
   const bollMid = data.map(item => item.boll_mid)
   const bollLower = data.map(item => item.boll_lower)
+  const difData = data.map(item => item.dif)
+  const deaData = data.map(item => item.dea)
+  const macdData = data.map(item => item.macd)
 
   const { tdBuy, tdSell } = calcTDSequential(data)
   
   const strategyMarkPoints = []
   if (strategyResult.value) {
-    // consecutive_ma5 策略：跌破布林下轨 + 站上5日线
     if (strategyResult.value.breakdown_date) {
       const item = data.find(d => d.trade_date === strategyResult.value.breakdown_date)
       if (item) {
@@ -264,7 +279,6 @@ const renderChart = (data) => {
       })
     }
     
-    // rise_then_fall 策略：大涨 + 连续下跌
     if (strategyResult.value.rise_date) {
       const item = data.find(d => d.trade_date === strategyResult.value.rise_date)
       if (item) {
@@ -318,6 +332,11 @@ const renderChart = (data) => {
 
   chart = echarts.init(chartRef.value)
 
+  const latestMacd = data.length > 0 ? data[data.length - 1] : null
+  const macdTitleText = latestMacd && latestMacd.macd != null
+    ? `MACD(12,26,9)  MACD:${latestMacd.macd.toFixed(4)}  DIF:${latestMacd.dif != null ? latestMacd.dif.toFixed(4) : '-'}  DEA:${latestMacd.dea != null ? latestMacd.dea.toFixed(4) : '-'}`
+    : 'MACD(12,26,9)'
+
   const option = {
     animation: true,
     animationDuration: 300,
@@ -326,6 +345,8 @@ const renderChart = (data) => {
     animationEasingUpdate: 'cubicOut',
     title: {
       text: stockCode + ' ' + stockName.value + ' K线图',
+      left: 0,
+      top: 0,
     },
     tooltip: {
       trigger: 'axis',
@@ -333,44 +354,86 @@ const renderChart = (data) => {
         type: 'cross',
         crossStyle: {
           color: '#999'
-        }
+        },
+        link: [{ xAxisIndex: 'all' }]
       },
       show: false
     },
     legend: {
-      data: ['K线', 'MA5', 'MA10', 'MA30', 'MA60', '布林上轨', '布林中轨', '布林下轨'],
+      data: ['K线', 'MA5', 'MA10', 'MA30', 'MA60', '布林上轨', '布林中轨', '布林下轨', 'DIF', 'DEA', 'MACD'],
+      top: 25,
     },
-    grid: {
-      left: '80',
-      right: '60',
-      bottom: '60',
-      top: '60',
-      containLabel: true,
+    axisPointer: {
+      link: [{ xAxisIndex: 'all' }],
     },
-    xAxis: {
-      type: 'category',
-      data: dates,
-      boundaryGap: false,
-      axisLine: { onZero: false },
-      splitLine: { show: false },
-      min: 'dataMin',
-      max: 'dataMax',
-    },
-    yAxis: {
-      scale: true,
-      splitArea: {
-        show: true,
+    grid: [
+      {
+        left: '80',
+        right: '60',
+        top: '70',
+        height: '55%',
+        containLabel: true,
       },
-    },
+      {
+        left: '80',
+        right: '60',
+        top: '72%',
+        height: '18%',
+        containLabel: true,
+      }
+    ],
+    xAxis: [
+      {
+        type: 'category',
+        data: dates,
+        boundaryGap: false,
+        axisLine: { onZero: false },
+        splitLine: { show: false },
+        min: 'dataMin',
+        max: 'dataMax',
+        gridIndex: 0,
+        axisLabel: { show: false },
+      },
+      {
+        type: 'category',
+        data: dates,
+        boundaryGap: false,
+        axisLine: { onZero: false },
+        splitLine: { show: false },
+        min: 'dataMin',
+        max: 'dataMax',
+        gridIndex: 1,
+        axisLabel: { show: true, fontSize: 10 },
+      }
+    ],
+    yAxis: [
+      {
+        scale: true,
+        gridIndex: 0,
+        splitArea: {
+          show: true,
+        },
+      },
+      {
+        scale: true,
+        gridIndex: 1,
+        splitArea: {
+          show: false,
+        },
+        axisLabel: { fontSize: 10 },
+      }
+    ],
 
     dataZoom: [
       {
         type: 'inside',
+        xAxisIndex: [0, 1],
         start: 0,
         end: 100,
       },
       {
         type: 'slider',
+        xAxisIndex: [0, 1],
         show: false,
       },
     ],
@@ -379,6 +442,8 @@ const renderChart = (data) => {
       {
         name: 'K线',
         type: 'candlestick',
+        xAxisIndex: 0,
+        yAxisIndex: 0,
         data: values,
         itemStyle: {
           color: '#ef5350',
@@ -417,6 +482,8 @@ const renderChart = (data) => {
       {
         name: 'MA5',
         type: 'line',
+        xAxisIndex: 0,
+        yAxisIndex: 0,
         data: ma5,
         smooth: true,
         symbol: 'none',
@@ -434,6 +501,8 @@ const renderChart = (data) => {
       {
         name: 'MA10',
         type: 'line',
+        xAxisIndex: 0,
+        yAxisIndex: 0,
         data: ma10,
         smooth: true,
         symbol: 'none',
@@ -446,6 +515,8 @@ const renderChart = (data) => {
       {
         name: 'MA30',
         type: 'line',
+        xAxisIndex: 0,
+        yAxisIndex: 0,
         data: ma30,
         smooth: true,
         symbol: 'none',
@@ -457,6 +528,8 @@ const renderChart = (data) => {
       {
         name: 'MA60',
         type: 'line',
+        xAxisIndex: 0,
+        yAxisIndex: 0,
         data: ma60,
         smooth: true,
         symbol: 'none',
@@ -474,6 +547,8 @@ const renderChart = (data) => {
       {
         name: '布林上轨',
         type: 'line',
+        xAxisIndex: 0,
+        yAxisIndex: 0,
         data: bollUpper,
         smooth: true,
         symbol: 'none',
@@ -487,6 +562,8 @@ const renderChart = (data) => {
       {
         name: '布林中轨',
         type: 'line',
+        xAxisIndex: 0,
+        yAxisIndex: 0,
         data: bollMid,
         smooth: true,
         symbol: 'none',
@@ -500,6 +577,8 @@ const renderChart = (data) => {
       {
         name: '布林下轨',
         type: 'line',
+        xAxisIndex: 0,
+        yAxisIndex: 0,
         data: bollLower,
         smooth: true,
         symbol: 'none',
@@ -513,6 +592,8 @@ const renderChart = (data) => {
       {
         name: 'TD买9',
         type: 'scatter',
+        xAxisIndex: 0,
+        yAxisIndex: 0,
         data: tdBuy.map(item => ({
           value: [item.coord[0], item.coord[1]],
           label: {
@@ -536,6 +617,8 @@ const renderChart = (data) => {
       {
         name: 'TD卖9',
         type: 'scatter',
+        xAxisIndex: 0,
+        yAxisIndex: 0,
         data: tdSell.map(item => ({
           value: [item.coord[0], item.coord[1]],
           label: {
@@ -556,7 +639,71 @@ const renderChart = (data) => {
           color: 'transparent',
         },
       },
+      {
+        name: 'DIF',
+        type: 'line',
+        xAxisIndex: 1,
+        yAxisIndex: 1,
+        data: difData,
+        smooth: true,
+        symbol: 'none',
+        lineStyle: {
+          width: 1.5,
+          color: '#ffffff',
+        },
+      },
+      {
+        name: 'DEA',
+        type: 'line',
+        xAxisIndex: 1,
+        yAxisIndex: 1,
+        data: deaData,
+        smooth: true,
+        symbol: 'none',
+        lineStyle: {
+          width: 1.5,
+          color: '#ffeb3b',
+        },
+      },
+      {
+        name: 'MACD',
+        type: 'bar',
+        xAxisIndex: 1,
+        yAxisIndex: 1,
+        data: macdData.map((val, idx) => ({
+          value: val,
+          itemStyle: {
+            color: val != null && val >= 0 ? '#ef5350' : '#26a69a',
+          }
+        })),
+        barWidth: '60%',
+        markLine: {
+          silent: true,
+          symbol: 'none',
+          lineStyle: {
+            color: '#666',
+            width: 1,
+            type: 'solid',
+          },
+          data: [
+            { yAxis: 0 }
+          ]
+        }
+      },
     ],
+    graphic: [
+      {
+        type: 'text',
+        left: 80,
+        top: '72%',
+        style: {
+          text: macdTitleText,
+          fontSize: 12,
+          fill: '#333',
+        },
+        z: 100,
+      }
+    ]
   }
 
   chart.setOption(option, true)
@@ -569,7 +716,7 @@ const renderChart = (data) => {
 
   chart.getZr().on('mousemove', (event) => {
     const pointInPixel = [event.offsetX, event.offsetY]
-    const pointInGrid = chart.convertFromPixel('grid', pointInPixel)
+    const pointInGrid = chart.convertFromPixel({ xAxisIndex: 0, yAxisIndex: 0 }, pointInPixel)
     
     if (pointInGrid && pointInGrid[0] != null) {
       const idx = Math.round(pointInGrid[0])
@@ -577,6 +724,17 @@ const renderChart = (data) => {
         const d = data[idx]
         currentDate.value = d.trade_date
         currentData.value = d
+
+        if (d.dif != null && d.dea != null && d.macd != null) {
+          const title = `MACD(12,26,9)  MACD:${d.macd.toFixed(4)}  DIF:${d.dif.toFixed(4)}  DEA:${d.dea.toFixed(4)}`
+          chart.setOption({
+            graphic: [{
+              left: 80,
+              top: '72%',
+              style: { text: title }
+            }]
+          })
+        }
       }
     }
   })

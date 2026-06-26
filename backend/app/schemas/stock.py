@@ -45,7 +45,11 @@ class KlineData(BaseModel):
     ma5: Optional[float] = None
     ma10: Optional[float] = None
     ma20: Optional[float] = None
+    ma30: Optional[float] = None
     ma60: Optional[float] = None
     boll_upper: Optional[float] = None
     boll_mid: Optional[float] = None
     boll_lower: Optional[float] = None
+    dif: Optional[float] = None
+    dea: Optional[float] = None
+    macd: Optional[float] = None

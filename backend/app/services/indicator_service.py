@@ -1,11 +1,30 @@
 import pandas as pd
-from typing import List, Dict, Any, Optional
+import numpy as np
+from typing import List, Dict, Any, Optional, Tuple
 
 
 def calculate_ma(prices: List[float], window: int) -> List[Optional[float]]:
     s = pd.Series(prices)
     ma = s.rolling(window=window).mean()
     return ma.round(2).tolist()
+
+
+def calculate_ema(prices: pd.Series, period: int) -> pd.Series:
+    return prices.ewm(span=period, adjust=False).mean()
+
+
+def calculate_macd(
+    closes: pd.Series,
+    fast: int = 12,
+    slow: int = 26,
+    signal: int = 9
+) -> Tuple[pd.Series, pd.Series, pd.Series]:
+    ema_fast = calculate_ema(closes, fast)
+    ema_slow = calculate_ema(closes, slow)
+    dif = ema_fast - ema_slow
+    dea = calculate_ema(dif, signal)
+    macd_hist = 2 * (dif - dea)
+    return dif, dea, macd_hist
 
 
 def calculate_bollinger_bands(
@@ -41,5 +60,10 @@ def calculate_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df['boll_upper'] = (df['MA20'] + 2 * std).round(2)
     df['boll_mid'] = df['MA20']
     df['boll_lower'] = (df['MA20'] - 2 * std).round(2)
+    
+    dif, dea, macd_hist = calculate_macd(df['close'])
+    df['dif'] = dif.round(4)
+    df['dea'] = dea.round(4)
+    df['macd'] = macd_hist.round(4)
     
     return df

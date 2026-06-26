@@ -27,8 +27,8 @@ KLINE_UPSERT_SQL = """
     INSERT INTO stock_kline (
         stock_code, trade_date, open, high, low, close, volume, amount,
         amplitude, change_pct, ma5, ma10, ma20, ma30, ma60,
-        boll_upper, boll_mid, boll_lower, dividend_info
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        boll_upper, boll_mid, boll_lower, dif, dea, macd, dividend_info
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(stock_code, trade_date) DO UPDATE SET
         open = excluded.open,
         high = excluded.high,
@@ -46,6 +46,9 @@ KLINE_UPSERT_SQL = """
         boll_upper = excluded.boll_upper,
         boll_mid = excluded.boll_mid,
         boll_lower = excluded.boll_lower,
+        dif = excluded.dif,
+        dea = excluded.dea,
+        macd = excluded.macd,
         dividend_info = excluded.dividend_info
 """
 
@@ -108,6 +111,9 @@ def _df_to_rows(stock_code: str, df: pd.DataFrame) -> List[tuple]:
             _safe_float(col(row, 'boll_upper')),
             _safe_float(col(row, 'boll_mid')),
             _safe_float(col(row, 'boll_lower')),
+            _safe_float(col(row, 'dif')),
+            _safe_float(col(row, 'dea')),
+            _safe_float(col(row, 'macd')),
             _format_dividend_info(col(row, 'dividend_info')),
         ))
     return rows
@@ -350,12 +356,14 @@ def fetch_one_stock_history(stock_code: str, start_date: str, end_date: str, his
             
             if history_data:
                 history_df = pd.DataFrame(history_data)
-                history_df['trade_date'] = pd.to_datetime(history_df['trade_date'])
+                history_df['trade_date'] = pd.to_datetime(history_df['trade_date']).dt.date
                 
                 combined_df = pd.concat([
                     history_df[['trade_date', 'close']],
                     df[['trade_date', 'close', 'open', 'high', 'low', 'volume', 'amount', 'dividend_info']]
                 ], ignore_index=True)
+                
+                combined_df = combined_df.sort_values('trade_date').reset_index(drop=True)
                 
                 combined_df['change_pct'] = (
                     (combined_df['close'] - combined_df['close'].shift(1)) / combined_df['close'].shift(1)

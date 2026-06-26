@@ -19,22 +19,22 @@
           </el-select>
         </el-form-item>
         <el-form-item label="总市值大于">
-          <el-input-number v-model="form.minMarketCap" :min="0" placeholder="不填则不限制" style="width: 150px;" />
+          <el-input-number v-model="form.minMarketCap" :min="1" :max="1000000" placeholder="不填则不限制" style="width: 150px;" />
           <span style="margin-left: 8px;">亿元</span>
         </el-form-item>
         
         <!-- consecutive_ma5 策略参数 -->
         <template v-if="form.strategy === 'consecutive_ma5'">
           <el-form-item label="最近">
-            <el-input-number v-model="form.xDays" :min="5" :max="100" style="width: 120px;" />
+            <el-input-number v-model="form.xDays" :min="1" :max="1000000" style="width: 120px;" />
             <span style="margin-left: 8px;">天内跌破布林下轨</span>
           </el-form-item>
           <el-form-item label="之后">
-            <el-input-number v-model="form.yDays" :min="3" :max="60" style="width: 120px;" />
+            <el-input-number v-model="form.yDays" :min="1" :max="1000000" style="width: 120px;" />
             <span style="margin-left: 8px;">天内</span>
           </el-form-item>
           <el-form-item label="连续">
-            <el-input-number v-model="form.zDays" :min="1" :max="10" style="width: 120px;" />
+            <el-input-number v-model="form.zDays" :min="1" :max="1000000" style="width: 120px;" />
             <span style="margin-left: 8px;">天站上 5 日均线</span>
           </el-form-item>
         </template>
@@ -42,15 +42,15 @@
         <!-- rise_then_fall 策略参数 -->
         <template v-if="form.strategy === 'rise_then_fall'">
           <el-form-item label="往前">
-            <el-input-number v-model="form.xDays" :min="5" :max="100" style="width: 120px;" />
+            <el-input-number v-model="form.xDays" :min="1" :max="1000000" style="width: 120px;" />
             <span style="margin-left: 8px;">天</span>
           </el-form-item>
           <el-form-item label="涨幅大于">
-            <el-input-number v-model="form.yPct" :min="0" :max="20" :step="0.5" style="width: 120px;" />
+            <el-input-number v-model="form.yPct" :min="1" :max="1000000" :step="0.5" style="width: 120px;" />
             <span style="margin-left: 8px;">%</span>
           </el-form-item>
           <el-form-item label="连续">
-            <el-input-number v-model="form.zDays" :min="1" :max="10" style="width: 120px;" />
+            <el-input-number v-model="form.zDays" :min="1" :max="1000000" style="width: 120px;" />
             <span style="margin-left: 8px;">天下跌</span>
           </el-form-item>
         </template>
@@ -58,11 +58,11 @@
         <!-- above_ma60 策略参数 -->
         <template v-if="form.strategy === 'above_ma60'">
           <el-form-item label="最近">
-            <el-input-number v-model="form.yDays" :min="5" :max="200" style="width: 120px;" />
+            <el-input-number v-model="form.yDays" :min="1" :max="1000000" style="width: 120px;" />
             <span style="margin-left: 8px;">天内</span>
           </el-form-item>
           <el-form-item label="站上60日均线">
-            <el-input-number v-model="form.zDays" :min="1" :max="100" style="width: 120px;" />
+            <el-input-number v-model="form.zDays" :min="1" :max="1000000" style="width: 120px;" />
             <span style="margin-left: 8px;">天</span>
           </el-form-item>
         </template>
@@ -186,10 +186,30 @@ const totalCount = ref(0)
 const chartDialogVisible = ref(false)
 const selectedStockCode = ref('')
 const selectedStockResult = ref(null)
-const form = ref({ strategy: '', minMarketCap: null, xDays: 30, yDays: 10, zDays: 2, yPct: 5.0 })
+
+// 默认参数
+const defaultParams = {
+  consecutive_ma5: { minMarketCap: 300, xDays: 30, yDays: 10, zDays: 2 },
+  rise_then_fall: { minMarketCap: 300, xDays: 30, yPct: 5.0, zDays: 3 },
+  above_ma60: { minMarketCap: 300, yDays: 5, zDays: 3 }
+}
+
+const form = ref({ strategy: '', minMarketCap: 300, xDays: 30, yDays: 5, zDays: 3, yPct: 5.0 })
 
 const selectedStrategy = computed(() => strategies.value.find(s => s.name === form.value.strategy))
 const toFixed = (num, digits = 2) => (num == null || Number.isNaN(Number(num)) ? '-' : Number(num).toFixed(digits))
+
+// 设置策略的默认参数
+const setDefaultParams = (strategyName) => {
+  const defaults = defaultParams[strategyName]
+  if (defaults) {
+    form.value.minMarketCap = defaults.minMarketCap
+    if (defaults.xDays !== undefined) form.value.xDays = defaults.xDays
+    if (defaults.yDays !== undefined) form.value.yDays = defaults.yDays
+    if (defaults.zDays !== undefined) form.value.zDays = defaults.zDays
+    if (defaults.yPct !== undefined) form.value.yPct = defaults.yPct
+  }
+}
 
 const loadLatestResult = async (strategyName) => {
   if (!strategyName) return
@@ -199,16 +219,21 @@ const loadLatestResult = async (strategyName) => {
       results.value = res.data.selected_stocks
       totalCount.value = res.data.total_count || 0
       hasRun.value = true
+      // 加载历史参数
       if (res.data.params) {
-        form.value.minMarketCap = res.data.params.min_market_cap ?? null
-        form.value.xDays = res.data.params.x_days || form.value.xDays
-        form.value.yDays = res.data.params.y_days || form.value.yDays
-        form.value.zDays = res.data.params.z_days || form.value.zDays
-        form.value.yPct = res.data.params.y_pct || form.value.yPct
+        form.value.minMarketCap = res.data.params.min_market_cap ?? 300
+        if (res.data.params.x_days !== undefined) form.value.xDays = res.data.params.x_days
+        if (res.data.params.y_days !== undefined) form.value.yDays = res.data.params.y_days
+        if (res.data.params.z_days !== undefined) form.value.zDays = res.data.params.z_days
+        if (res.data.params.y_pct !== undefined) form.value.yPct = res.data.params.y_pct
       }
+    } else {
+      // 没有历史结果，使用默认参数
+      setDefaultParams(strategyName)
     }
   } catch (error) {
     console.error('加载最新结果失败:', error)
+    setDefaultParams(strategyName)
   }
 }
 
@@ -225,15 +250,9 @@ onMounted(async () => {
   }
 })
 
-const onStrategyChange = () => {
-  if (form.value.strategy === 'consecutive_ma5') {
-    form.value.xDays = 30; form.value.yDays = 10; form.value.zDays = 2
-  } else if (form.value.strategy === 'rise_then_fall') {
-    form.value.xDays = 30; form.value.yPct = 5.0; form.value.zDays = 3
-  } else if (form.value.strategy === 'above_ma60') {
-    form.value.yDays = 20; form.value.zDays = 10
-  }
-  results.value = []; totalCount.value = 0; hasRun.value = false; loadLatestResult(form.value.strategy)
+const onStrategyChange = async () => {
+  results.value = []; totalCount.value = 0; hasRun.value = false
+  await loadLatestResult(form.value.strategy)
 }
 
 const runStrategy = async () => {
