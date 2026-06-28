@@ -57,8 +57,8 @@
             <div style="margin-bottom: 8px;">
               <span style="color:#ef5350;">●</span> 收盘: {{ toFixed(currentData.close) }}
             </div>
-            <div style="margin-bottom: 8px;" v-if="currentData.change_pct != null">
-              <span :style="{color: currentData.change_pct >= 0 ? '#ef5350' : '#26a69a'}">●</span> 涨跌幅: {{ toFixed(currentData.change_pct) }}%
+            <div style="margin-bottom: 8px;">
+              <span :style="{color: (currentData.change_pct != null ? currentData.change_pct : 0) >= 0 ? '#ef5350' : '#26a69a'}">●</span> 涨跌幅: {{ toFixed(currentData.change_pct != null ? currentData.change_pct : 0) }}%
             </div>
             <div style="margin-bottom: 8px;">
               <span style="color:#ef5350;">●</span> 最高: {{ toFixed(currentData.high) }}
@@ -92,11 +92,10 @@
             <div style="margin-top: 12px; padding-top: 8px; border-top: 1px solid #eee;"></div>
             <div style="margin-bottom: 8px; font-weight: bold; font-size: 13px;">MACD (12,26,9)</div>
             <div v-if="currentData.dif != null" style="margin-bottom: 8px;">
-              <span style="color:#ffffff; background:#333; padding:0 4px; border-radius:2px;">DIF</span>
-              <span style="margin-left: 8px;">{{ toFixed(currentData.dif, 4) }}</span>
+              <span style="color:#1890ff;">●</span> DIF: {{ toFixed(currentData.dif, 4) }}
             </div>
             <div v-if="currentData.dea != null" style="margin-bottom: 8px;">
-              <span style="color:#ffeb3b;">●</span> DEA: {{ toFixed(currentData.dea, 4) }}
+              <span style="color:#fa8c16;">●</span> DEA: {{ toFixed(currentData.dea, 4) }}
             </div>
             <div v-if="currentData.macd != null" style="margin-bottom: 8px;">
               <span :style="{color: currentData.macd >= 0 ? '#ef5350' : '#26a69a'}">●</span>
@@ -161,42 +160,89 @@ const toFixed = (num, digits = 2) => {
 }
 
 const calcTDSequential = (data) => {
-  const tdBuy = []
-  const tdSell = []
+  const buySequences = []
+  const sellSequences = []
   let buyCount = 0
   let sellCount = 0
+  let currentBuySeq = []
+  let currentSellSeq = []
 
   for (let i = 4; i < data.length; i++) {
     const curr = data[i]
     const prev4 = data[i - 4]
 
     if (curr.close > prev4.close) {
+      if (buyCount > 0) {
+        buySequences.push(currentBuySeq)
+        currentBuySeq = []
+        buyCount = 0
+      }
       sellCount++
-      buyCount = 0
-    } else if (curr.close < prev4.close) {
-      buyCount++
-      sellCount = 0
-    } else {
-      buyCount = 0
-      sellCount = 0
-    }
-
-    if (buyCount > 0 && buyCount <= 9) {
-      tdBuy.push({
-        coord: [data[i].trade_date, data[i].low],
-        value: buyCount,
-        dataIndex: i
-      })
-    }
-
-    if (sellCount > 0 && sellCount <= 9) {
-      tdSell.push({
+      currentSellSeq.push({
         coord: [data[i].trade_date, data[i].high],
         value: sellCount,
         dataIndex: i
       })
+    } else if (curr.close < prev4.close) {
+      if (sellCount > 0) {
+        sellSequences.push(currentSellSeq)
+        currentSellSeq = []
+        sellCount = 0
+      }
+      buyCount++
+      currentBuySeq.push({
+        coord: [data[i].trade_date, data[i].low],
+        value: buyCount,
+        dataIndex: i
+      })
+    } else {
+      if (buyCount > 0) {
+        buySequences.push(currentBuySeq)
+        currentBuySeq = []
+        buyCount = 0
+      }
+      if (sellCount > 0) {
+        sellSequences.push(currentSellSeq)
+        currentSellSeq = []
+        sellCount = 0
+      }
+    }
+
+    if (sellCount >= 9) {
+      sellSequences.push(currentSellSeq)
+      currentSellSeq = []
+      sellCount = 0
+    }
+    if (buyCount >= 9) {
+      buySequences.push(currentBuySeq)
+      currentBuySeq = []
+      buyCount = 0
     }
   }
+
+  if (currentBuySeq.length > 0) {
+    buySequences.push(currentBuySeq)
+  }
+  if (currentSellSeq.length > 0) {
+    sellSequences.push(currentSellSeq)
+  }
+
+  const tdBuy = []
+  const tdSell = []
+
+  buySequences.forEach((seq, idx) => {
+    const isLast = idx === buySequences.length - 1
+    if (isLast || seq.length >= 8) {
+      tdBuy.push(...seq)
+    }
+  })
+
+  sellSequences.forEach((seq, idx) => {
+    const isLast = idx === sellSequences.length - 1
+    if (isLast || seq.length >= 8) {
+      tdSell.push(...seq)
+    }
+  })
 
   return { tdBuy, tdSell }
 }
@@ -226,6 +272,35 @@ const renderChart = (data) => {
   const macdData = data.map(item => item.macd)
 
   const { tdBuy, tdSell } = calcTDSequential(data)
+  
+  const totalBars = data.length
+  const defaultShowCount = 200
+  const dataZoomStart = totalBars > defaultShowCount ? ((totalBars - defaultShowCount) / totalBars) * 100 : 0
+
+  // 计算指定索引范围内的最高/最低点
+  const calcExtremeInRange = (startIdx, endIdx) => {
+    let maxPrice = -Infinity
+    let maxDate = ''
+    let minPrice = Infinity
+    let minDate = ''
+    for (let i = Math.max(0, startIdx); i <= Math.min(data.length - 1, endIdx); i++) {
+      const item = data[i]
+      if (item.high > maxPrice) {
+        maxPrice = item.high
+        maxDate = item.trade_date
+      }
+      if (item.low < minPrice) {
+        minPrice = item.low
+        minDate = item.trade_date
+      }
+    }
+    return { maxDate, maxPrice, minDate, minPrice }
+  }
+
+  // 初始显示范围的最高/最低点
+  const initialStart = Math.floor(dataZoomStart / 100 * totalBars)
+  const initialEnd = totalBars - 1
+  const { maxDate: initMaxDate, maxPrice: initMaxPrice, minDate: initMinDate, minPrice: initMinPrice } = calcExtremeInRange(initialStart, initialEnd)
   
   const strategyMarkPoints = []
   if (strategyResult.value) {
@@ -333,9 +408,6 @@ const renderChart = (data) => {
   chart = echarts.init(chartRef.value)
 
   const latestMacd = data.length > 0 ? data[data.length - 1] : null
-  const macdTitleText = latestMacd && latestMacd.macd != null
-    ? `MACD(12,26,9)  MACD:${latestMacd.macd.toFixed(4)}  DIF:${latestMacd.dif != null ? latestMacd.dif.toFixed(4) : '-'}  DEA:${latestMacd.dea != null ? latestMacd.dea.toFixed(4) : '-'}`
-    : 'MACD(12,26,9)'
 
   const option = {
     animation: true,
@@ -352,12 +424,20 @@ const renderChart = (data) => {
       trigger: 'axis',
       axisPointer: {
         type: 'cross',
-        crossStyle: {
-          color: '#999'
+        link: [{ xAxisIndex: 'all' }],
+        lineStyle: {
+          color: '#999',
+          width: 1,
+          type: 'dashed',
         },
-        link: [{ xAxisIndex: 'all' }]
+        crossStyle: {
+          color: '#999',
+          width: 1,
+          type: 'dashed',
+        }
       },
-      show: false
+      show: true,
+      showContent: false,
     },
     legend: {
       data: ['K线', 'MA5', 'MA10', 'MA30', 'MA60', '布林上轨', '布林中轨', '布林下轨', 'DIF', 'DEA', 'MACD'],
@@ -365,6 +445,16 @@ const renderChart = (data) => {
     },
     axisPointer: {
       link: [{ xAxisIndex: 'all' }],
+      lineStyle: {
+        color: '#999',
+        width: 1,
+        type: 'dashed',
+      },
+      crossStyle: {
+        color: '#999',
+        width: 1,
+        type: 'dashed',
+      }
     },
     grid: [
       {
@@ -428,7 +518,7 @@ const renderChart = (data) => {
       {
         type: 'inside',
         xAxisIndex: [0, 1],
-        start: 0,
+        start: dataZoomStart,
         end: 100,
       },
       {
@@ -454,8 +544,9 @@ const renderChart = (data) => {
         markPoint: {
           data: [
             {
-              type: 'max',
+              coord: [initMaxDate, initMaxPrice],
               name: '最高价',
+              value: initMaxPrice,
               label: {
                 formatter: '最高\n{c}',
                 fontSize: 10,
@@ -465,8 +556,9 @@ const renderChart = (data) => {
               }
             },
             {
-              type: 'min',
+              coord: [initMinDate, initMinPrice],
               name: '最低价',
+              value: initMinPrice,
               label: {
                 formatter: '最低\n{c}',
                 fontSize: 10,
@@ -487,15 +579,10 @@ const renderChart = (data) => {
         data: ma5,
         smooth: true,
         symbol: 'none',
-        animation: true,
-        animationDuration: 300,
-        animationDurationUpdate: 300,
-        animationEasing: 'cubicOut',
-        animationEasingUpdate: 'cubicOut',
         lineStyle: {
-          width: 3,
+          width: 1,
           color: '#000',
-          opacity: 1,
+          opacity: 0.8,
         },
       },
       {
@@ -533,11 +620,6 @@ const renderChart = (data) => {
         data: ma60,
         smooth: true,
         symbol: 'none',
-        animation: true,
-        animationDuration: 300,
-        animationDurationUpdate: 300,
-        animationEasing: 'cubicOut',
-        animationEasingUpdate: 'cubicOut',
         lineStyle: {
           width: 2,
           color: '#ff6b6b',
@@ -649,7 +731,7 @@ const renderChart = (data) => {
         symbol: 'none',
         lineStyle: {
           width: 1.5,
-          color: '#ffffff',
+          color: '#1890ff',
         },
       },
       {
@@ -662,7 +744,7 @@ const renderChart = (data) => {
         symbol: 'none',
         lineStyle: {
           width: 1.5,
-          color: '#ffeb3b',
+          color: '#fa8c16',
         },
       },
       {
@@ -676,7 +758,7 @@ const renderChart = (data) => {
             color: val != null && val >= 0 ? '#ef5350' : '#26a69a',
           }
         })),
-        barWidth: '60%',
+        barWidth: '25%',
         markLine: {
           silent: true,
           symbol: 'none',
@@ -697,9 +779,43 @@ const renderChart = (data) => {
         left: 80,
         top: '72%',
         style: {
-          text: macdTitleText,
+          text: 'MACD(12,26,9)  ',
           fontSize: 12,
           fill: '#333',
+          fontWeight: 'bold',
+        },
+        z: 100,
+      },
+      {
+        type: 'text',
+        left: 80 + 85,
+        top: '72%',
+        style: {
+          text: latestMacd && latestMacd.macd != null ? `MACD:${latestMacd.macd.toFixed(4)}  ` : '',
+          fontSize: 12,
+          fill: latestMacd && latestMacd.macd != null && latestMacd.macd >= 0 ? '#ef5350' : '#26a69a',
+        },
+        z: 100,
+      },
+      {
+        type: 'text',
+        left: 80 + 175,
+        top: '72%',
+        style: {
+          text: latestMacd && latestMacd.dif != null ? `DIF:${latestMacd.dif.toFixed(4)}  ` : '',
+          fontSize: 12,
+          fill: '#1890ff',
+        },
+        z: 100,
+      },
+      {
+        type: 'text',
+        left: 80 + 250,
+        top: '72%',
+        style: {
+          text: latestMacd && latestMacd.dea != null ? `DEA:${latestMacd.dea.toFixed(4)}` : '',
+          fontSize: 12,
+          fill: '#fa8c16',
         },
         z: 100,
       }
@@ -714,6 +830,29 @@ const renderChart = (data) => {
     currentData.value = latestData
   }
 
+  // dataZoom时更新最高/最低点标记
+  chart.on('dataZoom', () => {
+    const opt = chart.getOption()
+    const start = opt.dataZoom[0].start
+    const end = opt.dataZoom[0].end
+    const startIdx = Math.floor(start / 100 * totalBars)
+    const endIdx = Math.floor(end / 100 * totalBars) - 1
+    const { maxDate, maxPrice, minDate, minPrice } = calcExtremeInRange(startIdx, endIdx)
+
+    chart.setOption({
+      series: [{
+        name: 'K线',
+        markPoint: {
+          data: [
+            { coord: [maxDate, maxPrice], value: maxPrice, name: '最高价', label: { formatter: '最高\n{c}', fontSize: 10 }, itemStyle: { color: '#ef5350' } },
+            { coord: [minDate, minPrice], value: minPrice, name: '最低价', label: { formatter: '最低\n{c}', fontSize: 10 }, itemStyle: { color: '#26a69a' } },
+            ...strategyMarkPoints
+          ]
+        }
+      }]
+    })
+  })
+
   chart.getZr().on('mousemove', (event) => {
     const pointInPixel = [event.offsetX, event.offsetY]
     const pointInGrid = chart.convertFromPixel({ xAxisIndex: 0, yAxisIndex: 0 }, pointInPixel)
@@ -726,76 +865,42 @@ const renderChart = (data) => {
         currentData.value = d
 
         if (d.dif != null && d.dea != null && d.macd != null) {
-          const title = `MACD(12,26,9)  MACD:${d.macd.toFixed(4)}  DIF:${d.dif.toFixed(4)}  DEA:${d.dea.toFixed(4)}`
           chart.setOption({
-            graphic: [{
-              left: 80,
-              top: '72%',
-              style: { text: title }
-            }]
+            graphic: [
+              {
+                left: 80,
+                top: '72%',
+                style: { text: 'MACD(12,26,9)  ' }
+              },
+              {
+                left: 80 + 85,
+                top: '72%',
+                style: { 
+                  text: `MACD:${d.macd.toFixed(4)}  `,
+                  fill: d.macd >= 0 ? '#ef5350' : '#26a69a',
+                }
+              },
+              {
+                left: 80 + 175,
+                top: '72%',
+                style: { 
+                  text: `DIF:${d.dif.toFixed(4)}  `,
+                  fill: '#1890ff',
+                }
+              },
+              {
+                left: 80 + 250,
+                top: '72%',
+                style: { 
+                  text: `DEA:${d.dea.toFixed(4)}`,
+                  fill: '#fa8c16',
+                }
+              }
+            ]
           })
         }
       }
     }
-  })
-
-  chart.on('dataZoom', () => {
-    if (!chart) return
-    const opt = chart.getOption()
-    const start = opt.dataZoom[0].start / 100
-    const end = opt.dataZoom[0].end / 100
-    const startIdx = Math.floor(start * data.length)
-    const endIdx = Math.ceil(end * data.length)
-    const visibleData = data.slice(startIdx, endIdx)
-
-    if (visibleData.length === 0) return
-
-    let maxVal = -Infinity
-    let minVal = Infinity
-    let maxIdx = 0
-    let minIdx = 0
-
-    visibleData.forEach((item, idx) => {
-      if (item.high > maxVal) {
-        maxVal = item.high
-        maxIdx = idx
-      }
-      if (item.low < minVal) {
-        minVal = item.low
-        minIdx = idx
-      }
-    })
-
-    chart.setOption({
-      series: [{
-        markPoint: {
-          data: [
-            {
-              coord: [visibleData[maxIdx].trade_date, maxVal],
-              name: '最高价',
-              label: {
-                formatter: '最高\n' + toFixed(maxVal),
-                fontSize: 10,
-              },
-              itemStyle: {
-                color: '#ef5350',
-              }
-            },
-            {
-              coord: [visibleData[minIdx].trade_date, minVal],
-              name: '最低价',
-              label: {
-                formatter: '最低\n' + toFixed(minVal),
-                fontSize: 10,
-              },
-              itemStyle: {
-                color: '#26a69a',
-              }
-            }
-          ]
-        }
-      }]
-    })
   })
 }
 

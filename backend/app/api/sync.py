@@ -144,9 +144,18 @@ def run_sync_task(start_date: str, end_date: str, skip_check: bool = True, histo
     try:
         begin_sync()
 
+        start_date_clean = start_date.replace('-', '')
+        end_date_clean = end_date.replace('-', '')
+        original_start = start_date_clean
+
+        sync_start_obj = datetime.strptime(start_date_clean, "%Y%m%d").date()
+        extended_start_obj = sync_start_obj - timedelta(days=365)
+        start_date_clean = extended_start_obj.strftime("%Y%m%d")
+
         print("=" * 50)
         print("[START] Starting sync task")
-        print(f"[INFO] Date range: {start_date} to {end_date}")
+        print(f"[INFO] Requested range: {original_start} to {end_date_clean}")
+        print(f"[INFO] Extended range (for QFQ accuracy): {start_date_clean} to {end_date_clean}")
         print(f"[INFO] Fetch workers: {FETCH_WORKERS}, rate limit: {sync_service.KLINE_API_RATE_PER_SECOND}/s")
         print(f"[INFO] Save queue max: {SAVE_QUEUE_MAXSIZE}, batch size: {BATCH_SAVE_SIZE}")
         print(f"[INFO] Skip check: {'enabled' if skip_check else 'disabled'}")
@@ -181,7 +190,6 @@ def run_sync_task(start_date: str, end_date: str, skip_check: bool = True, histo
         print(f"[INFO] Loaded {len(skipped_codes)} stocks from skip list")
 
         print("\n[STEP 1.5/3] Pre-loading historical data for indicator calculation...")
-        start_date_clean = start_date.replace('-', '')
         sync_start_date_obj = datetime.strptime(start_date_clean, "%Y%m%d").date()
         history_start_date_obj = sync_start_date_obj - timedelta(days=120)
         filtered_codes = [s.code for s in filtered_stocks]
@@ -198,7 +206,7 @@ def run_sync_task(start_date: str, end_date: str, skip_check: bool = True, histo
 
         def fetch_and_enqueue(stock):
             result = _process_single_stock(
-                stock, start_date, end_date, skipped_codes, local_history_cache, skip_check
+                stock, start_date_clean, end_date_clean, skipped_codes, local_history_cache, skip_check
             )
             if result["status"] == "success":
                 # 队列满时阻塞，自然降低 API 请求速率

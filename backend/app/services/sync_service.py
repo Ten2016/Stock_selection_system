@@ -276,29 +276,15 @@ def save_stocks_basic_info(df):
         db.commit()
 
 
-def fetch_one_stock_history(stock_code: str, start_date: str, end_date: str, history_data: list = None):
-    """获取股票历史 K 线数据（请求前全局限流）。"""
+def _fetch_kline_page(symbol: str, start_date: str, end_date: str) -> list:
+    """单次请求腾讯K线接口，返回原始kline列表（带限流和重试）。"""
     max_retries = 3
-    retry_count = 0
-    
-    while retry_count < max_retries:
+    for retry_count in range(max_retries):
         if is_cancelled():
-            return pd.DataFrame()
+            return []
         
         try:
-            prefix = _get_stock_prefix(stock_code)
-            symbol = f"{prefix}{stock_code}"
-            
-            if '-' not in start_date:
-                start_date_clean = f"{start_date[:4]}-{start_date[4:6]}-{start_date[6:]}"
-            else:
-                start_date_clean = start_date
-            if '-' not in end_date:
-                end_date_clean = f"{end_date[:4]}-{end_date[4:6]}-{end_date[6:]}"
-            else:
-                end_date_clean = end_date
-            
-            url = f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={symbol},day,{start_date_clean},{end_date_clean},1000,qfq"
+            url = f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={symbol},day,{start_date},{end_date},500,qfq"
             
             headers = {"Referer": "https://finance.qq.com"}
             _kline_rate_limiter.acquire()
@@ -326,79 +312,118 @@ def fetch_one_stock_history(stock_code: str, start_date: str, end_date: str, his
                 stock_data = {}
             
             klines = stock_data.get('qfqday', stock_data.get('day', [])) if isinstance(stock_data, dict) else []
-            
-            if not klines:
-                return pd.DataFrame()
-            
-            dividend_map = {}
-            base_klines = []
-            
-            for row in klines:
-                trade_date = row[0]
-                if len(row) >= 7 and isinstance(row[6], dict):
-                    dividend_map[trade_date] = row[6]
-                base_klines.append(row[:6])
-            
-            df = pd.DataFrame(base_klines, columns=['trade_date', 'open', 'close', 'high', 'low', 'volume'])
-            
-            df['trade_date'] = pd.to_datetime(df['trade_date']).dt.date
-            df['open'] = pd.to_numeric(df['open'], errors='coerce')
-            df['close'] = pd.to_numeric(df['close'], errors='coerce')
-            df['high'] = pd.to_numeric(df['high'], errors='coerce')
-            df['low'] = pd.to_numeric(df['low'], errors='coerce')
-            df['volume'] = pd.to_numeric(df['volume'], errors='coerce')
-            
-            df['amount'] = df['volume'] * df['close'] / 100
-            
-            df['dividend_info'] = df['trade_date'].apply(lambda d: dividend_map.get(str(d), None))
-            
-            df = df.sort_values('trade_date').reset_index(drop=True)
-            
-            if history_data:
-                history_df = pd.DataFrame(history_data)
-                history_df['trade_date'] = pd.to_datetime(history_df['trade_date']).dt.date
-                
-                combined_df = pd.concat([
-                    history_df[['trade_date', 'close']],
-                    df[['trade_date', 'close', 'open', 'high', 'low', 'volume', 'amount', 'dividend_info']]
-                ], ignore_index=True)
-                
-                combined_df = combined_df.sort_values('trade_date').reset_index(drop=True)
-                
-                combined_df['change_pct'] = (
-                    (combined_df['close'] - combined_df['close'].shift(1)) / combined_df['close'].shift(1)
-                ) * 100
-                combined_df['change_pct'] = combined_df['change_pct'].round(2)
-                combined_df['change_pct'] = combined_df['change_pct'].where(combined_df['change_pct'].notna(), None)
-                combined_df = calculate_all_indicators(combined_df)
-                
-                combined_df['amplitude'] = (
-                    (combined_df['high'] - combined_df['low']) / combined_df['close'].shift(1)
-                ) * 100
-                
-                new_dates = set(df['trade_date'])
-                df = combined_df[combined_df['trade_date'].isin(new_dates)].reset_index(drop=True)
-            else:
-                df['change_pct'] = ((df['close'] - df['close'].shift(1)) / df['close'].shift(1)) * 100
-                df['change_pct'] = df['change_pct'].round(2)
-                df['change_pct'] = df['change_pct'].where(df['change_pct'].notna(), None)
-                df = calculate_all_indicators(df)
-                df['amplitude'] = ((df['high'] - df['low']) / df['close'].shift(1)) * 100
-            
-            return df
+            return klines
             
         except Exception as e:
-            retry_count += 1
-            print(f"[ERROR] Failed to fetch {stock_code} (attempt {retry_count}/{max_retries}): {e}")
-            
-            if retry_count < max_retries:
-                wait_time = retry_count * 2
+            if retry_count < max_retries - 1:
+                wait_time = (retry_count + 1) * 2
                 for _ in range(wait_time * 10):
                     if is_cancelled():
-                        return pd.DataFrame()
+                        return []
                     time.sleep(0.1)
             else:
                 raise
+    return []
+
+
+def fetch_one_stock_history(stock_code: str, start_date: str, end_date: str, history_data: list = None):
+    """获取股票历史 K 线数据（分页拉取，每次约1年，避免超过腾讯API返回上限）。"""
+    if '-' not in start_date:
+        start_date_clean = f"{start_date[:4]}-{start_date[4:6]}-{start_date[6:]}"
+    else:
+        start_date_clean = start_date
+    if '-' not in end_date:
+        end_date_clean = f"{end_date[:4]}-{end_date[4:6]}-{end_date[6:]}"
+    else:
+        end_date_clean = end_date
+    
+    prefix = _get_stock_prefix(stock_code)
+    symbol = f"{prefix}{stock_code}"
+    
+    start_dt = datetime.strptime(start_date_clean, "%Y-%m-%d").date()
+    end_dt = datetime.strptime(end_date_clean, "%Y-%m-%d").date()
+    
+    all_klines = []
+    current_start = start_dt
+    
+    while current_start <= end_dt:
+        current_end = current_start + timedelta(days=600)
+        if current_end > end_dt:
+            current_end = end_dt
+        
+        page_start = current_start.strftime("%Y-%m-%d")
+        page_end = current_end.strftime("%Y-%m-%d")
+        
+        klines = _fetch_kline_page(symbol, page_start, page_end)
+        
+        if klines:
+            all_klines.extend(klines)
+        
+        current_start = current_end + timedelta(days=1)
+    
+    if not all_klines:
+        return pd.DataFrame()
+    
+    dividend_map = {}
+    base_klines = []
+    
+    seen_dates = set()
+    for row in all_klines:
+        trade_date = row[0]
+        if trade_date in seen_dates:
+            continue
+        seen_dates.add(trade_date)
+        if len(row) >= 7 and isinstance(row[6], dict):
+            dividend_map[trade_date] = row[6]
+        base_klines.append(row[:6])
+    
+    df = pd.DataFrame(base_klines, columns=['trade_date', 'open', 'close', 'high', 'low', 'volume'])
+    
+    df['trade_date'] = pd.to_datetime(df['trade_date']).dt.date
+    df['open'] = pd.to_numeric(df['open'], errors='coerce')
+    df['close'] = pd.to_numeric(df['close'], errors='coerce')
+    df['high'] = pd.to_numeric(df['high'], errors='coerce')
+    df['low'] = pd.to_numeric(df['low'], errors='coerce')
+    df['volume'] = pd.to_numeric(df['volume'], errors='coerce')
+    
+    df['amount'] = df['volume'] * df['close'] / 100
+    
+    df['dividend_info'] = df['trade_date'].apply(lambda d: dividend_map.get(str(d), None))
+    
+    df = df.sort_values('trade_date').reset_index(drop=True)
+    
+    if history_data:
+        history_df = pd.DataFrame(history_data)
+        history_df['trade_date'] = pd.to_datetime(history_df['trade_date']).dt.date
+        
+        combined_df = pd.concat([
+            history_df[['trade_date', 'close']],
+            df[['trade_date', 'close', 'open', 'high', 'low', 'volume', 'amount', 'dividend_info']]
+        ], ignore_index=True)
+        
+        combined_df = combined_df.sort_values('trade_date').reset_index(drop=True)
+        
+        combined_df['change_pct'] = (
+            (combined_df['close'] - combined_df['close'].shift(1)) / combined_df['close'].shift(1)
+        ) * 100
+        combined_df['change_pct'] = combined_df['change_pct'].round(2)
+        combined_df['change_pct'] = combined_df['change_pct'].where(combined_df['change_pct'].notna(), None)
+        combined_df = calculate_all_indicators(combined_df)
+        
+        combined_df['amplitude'] = (
+            (combined_df['high'] - combined_df['low']) / combined_df['close'].shift(1)
+        ) * 100
+        
+        new_dates = set(df['trade_date'])
+        df = combined_df[combined_df['trade_date'].isin(new_dates)].reset_index(drop=True)
+    else:
+        df['change_pct'] = ((df['close'] - df['close'].shift(1)) / df['close'].shift(1)) * 100
+        df['change_pct'] = df['change_pct'].round(2)
+        df['change_pct'] = df['change_pct'].where(df['change_pct'].notna(), None)
+        df = calculate_all_indicators(df)
+        df['amplitude'] = ((df['high'] - df['low']) / df['close'].shift(1)) * 100
+    
+    return df
 
 
 def get_latest_sync_date() -> Optional[str]:

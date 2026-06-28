@@ -31,6 +31,21 @@ export const selectStocks = (strategyName, minMarketCap = null, xDays = 30, yDay
 
 export const getLatestStrategyResult = (strategyName) => api.get('/strategies/latest-result', { params: { strategy_name: strategyName } })
 
+export const searchStocks = (keyword, limit = 20) => api.get('/stocks', { params: { search: keyword, limit, skip: 0 } })
+
+export const backtestStrategy = (strategyName, stockCode, startYear = 2020, xDays = 30, yDays = 10, zDays = 2, yPct = 5.0) => {
+  const params = {
+    strategy_name: strategyName,
+    stock_code: stockCode,
+    start_year: startYear,
+    x_days: xDays,
+    y_days: yDays,
+    z_days: zDays,
+    y_pct: yPct,
+  }
+  return api.get('/strategies/backtest', { params, timeout: 300000 })
+}
+
 export const syncBasicInfo = () => api.post('/sync/sync-basic-info')
 
 export const getSystemHealth = () => api.get('/system/health')

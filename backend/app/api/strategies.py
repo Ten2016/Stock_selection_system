@@ -106,3 +106,28 @@ async def select_stocks(
         "selected_stocks": results,
         "total_count": len(results)
     })
+
+
+@router.get("/backtest")
+async def backtest_strategy(
+    strategy_name: str = Query(..., description="策略名称"),
+    stock_code: str = Query(..., description="股票代码"),
+    start_year: int = Query(2020, description="回测起始年份"),
+    x_days: int = Query(30, description="往前找x天"),
+    y_days: int = Query(10, description="之后y天内"),
+    z_days: int = Query(2, description="连续z天"),
+    y_pct: float = Query(5.0, description="涨幅大于y%"),
+    db: Session = Depends(get_db)
+):
+    """回测单只股票的策略，返回历史所有买点"""
+    result = strategy_service.backtest_strategy(
+        db,
+        stock_code,
+        strategy_name,
+        start_year=start_year,
+        x_days=x_days,
+        y_days=y_days,
+        z_days=z_days,
+        y_pct=y_pct
+    )
+    return success(data=convert_decimals(result))

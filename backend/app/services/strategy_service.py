@@ -265,7 +265,7 @@ def run_strategy_for_stock(
     :return: 策略结果
     """
     # 获取足够的K线数据（倒序）
-    max_days = max(x_days, y_days, z_days) + 60
+    max_days = max(x_days, y_days, z_days) + 200
     data = db.query(StockKline).filter(
         StockKline.stock_code == stock.code
     ).order_by(StockKline.trade_date.desc()).limit(max_days).all()
@@ -294,6 +294,15 @@ def run_strategy_for_stock(
             }
     elif strategy_name == 'above_ma60':
         result = check_strategy_above_ma60(data, y_days, z_days)
+        if result:
+            return {
+                'code': stock.code,
+                'name': stock.name,
+                'total_cap': stock.total_cap,
+                'result': result
+            }
+    elif strategy_name == 'macd_green_pullback':
+        result = check_strategy_macd_green_pullback(data, y_days=y_days)
         if result:
             return {
                 'code': stock.code,
@@ -378,5 +387,294 @@ def get_available_strategies() -> List[dict]:
             'name': 'above_ma60',
             'display_name': '站上60日均线',
             'description': '针对总市值大于x亿的股票，在最近y天内，有z天收盘价站上60日均线'
+        },
+        {
+            'name': 'macd_green_pullback',
+            'display_name': 'MACD绿柱拐点上升通道',
+            'description': '上升趋势中，MACD绿柱刚从最高点开始缩短（拐点出现），且上一个绿柱波段的股价最低点比当前绿柱波段的股价最低点更低（一底比一底高）'
         }
     ]
+
+
+def _find_green_waves(sorted_data, min_days=3, tolerate_red=1):
+    """
+    识别绿柱波段
+    
+    :param sorted_data: 按日期正序排列的K线数据
+    :param min_days: 最少连续绿柱天数才算有效波段
+    :param tolerate_red: 中间容忍的红柱天数（夹在中间不算断开）
+    :return: 绿柱波段列表，每个波段是 {start_idx, end_idx, valley_idx, valley_macd, min_low, min_low_date}
+    """
+    waves = []
+    n = len(sorted_data)
+    i = 0
+    
+    while i < n:
+        if sorted_data[i].macd is not None and sorted_data[i].macd < 0:
+            start_idx = i
+            end_idx = i
+            valley_idx = i
+            valley_macd = sorted_data[i].macd
+            min_low = sorted_data[i].low
+            min_low_date = sorted_data[i].trade_date
+            red_streak = 0
+            j = i + 1
+            
+            while j < n:
+                bar = sorted_data[j]
+                if bar.macd is not None and bar.macd < 0:
+                    red_streak = 0
+                    end_idx = j
+                    if bar.macd < valley_macd:
+                        valley_idx = j
+                        valley_macd = bar.macd
+                    if bar.low is not None and bar.low < min_low:
+                        min_low = bar.low
+                        min_low_date = bar.trade_date
+                    j += 1
+                else:
+                    red_streak += 1
+                    if red_streak > tolerate_red:
+                        break
+                    j += 1
+            
+            if end_idx - start_idx + 1 >= min_days:
+                waves.append({
+                    'start_idx': start_idx,
+                    'end_idx': end_idx,
+                    'valley_idx': valley_idx,
+                    'valley_macd': valley_macd,
+                    'min_low': min_low,
+                    'min_low_date': min_low_date,
+                })
+            
+            i = j
+        else:
+            i += 1
+    
+    return waves
+
+
+def check_strategy_macd_green_pullback(
+    data,
+    y_days: int = 5,
+    confirm_days: int = 2,
+    min_wave_days: int = 3,
+    tolerate_red: int = 1
+):
+    """
+    MACD绿柱拐点上升通道策略
+    
+    条件：
+    1. 当前处于绿柱缩短阶段（最新一天macd < 0，且绿柱在缩短）
+    2. 最近y天内出现绿柱拐点（谷），且之后至少有confirm_days确认缩短
+    3. 上一个绿柱波段的股价最低点 < 当前绿柱波段的股价最低点（一底比一底高）
+    
+    :param data: 股票K线数据（按日期倒序排列）
+    :param y_days: 最近y天内出现拐点
+    :param confirm_days: 拐点后需要确认缩短的天数
+    :param min_wave_days: 绿柱波段最少天数
+    :param tolerate_red: 绿柱波段中间容忍的红柱天数
+    :return: 如果满足条件返回策略信息，否则返回None
+    """
+    if len(data) < 120:
+        return None
+    
+    sorted_data = sorted(data, key=lambda x: x.trade_date)
+    n = len(sorted_data)
+    latest_idx = n - 1
+    
+    waves = _find_green_waves(sorted_data, min_days=min_wave_days, tolerate_red=tolerate_red)
+    
+    if len(waves) < 2:
+        return None
+    
+    current_wave = waves[-1]
+    
+    if current_wave['end_idx'] != latest_idx:
+        return None
+    
+    valley_idx = current_wave['valley_idx']
+    
+    if latest_idx - valley_idx < confirm_days:
+        return None
+    
+    if latest_idx - valley_idx > y_days:
+        return None
+    
+    shortening = True
+    for k in range(valley_idx + 1, latest_idx + 1):
+        if sorted_data[k].macd is None or sorted_data[k - 1].macd is None:
+            shortening = False
+            break
+        if sorted_data[k].macd < sorted_data[k - 1].macd:
+            shortening = False
+            break
+    
+    if not shortening:
+        return None
+    
+    prev_wave = waves[-2]
+    
+    if prev_wave['min_low'] is None or current_wave['min_low'] is None:
+        return None
+    
+    if prev_wave['min_low'] >= current_wave['min_low']:
+        return None
+    
+    valley_date = sorted_data[valley_idx].trade_date.strftime('%Y-%m-%d')
+    valley_macd_val = float(current_wave['valley_macd']) if current_wave['valley_macd'] is not None else None
+    
+    strategy_name = (f'MACD绿柱拐点上升通道：最近{y_days}天内出现绿柱拐点，'
+                     f'缩短{confirm_days}天确认，股价一底比一底高')
+    
+    return {
+        'strategy': strategy_name,
+        'valley_date': valley_date,
+        'valley_macd': valley_macd_val,
+        'shortening_days': latest_idx - valley_idx,
+        'current_min_low': float(current_wave['min_low']),
+        'current_min_low_date': current_wave['min_low_date'].strftime('%Y-%m-%d'),
+        'prev_min_low': float(prev_wave['min_low']),
+        'prev_min_low_date': prev_wave['min_low_date'].strftime('%Y-%m-%d'),
+        'low_diff_pct': round((float(current_wave['min_low']) - float(prev_wave['min_low'])) / float(prev_wave['min_low']) * 100, 2),
+        'details': {}
+    }
+
+
+def backtest_strategy(
+    db: Session,
+    stock_code: str,
+    strategy_name: str,
+    start_year: int = 2020,
+    x_days: int = 30,
+    y_days: int = 10,
+    z_days: int = 2,
+    y_pct: float = 5.0
+) -> dict:
+    """
+    回测单只股票的策略，返回历史所有买点
+    
+    :param db: 数据库会话
+    :param stock_code: 股票代码
+    :param strategy_name: 策略名称
+    :param start_year: 从哪一年开始回测
+    :param x_days: 策略参数x
+    :param y_days: 策略参数y
+    :param z_days: 策略参数z
+    :param y_pct: 策略参数y_pct
+    :return: 回测结果 { stock_code, stock_name, signals: [...] }
+    """
+    stock = db.query(StockBasic).filter(StockBasic.code == stock_code).first()
+    if not stock:
+        return {'stock_code': stock_code, 'stock_name': '', 'signals': []}
+    
+    # 获取所有K线数据（正序）
+    data = db.query(StockKline).filter(
+        StockKline.stock_code == stock_code
+    ).order_by(StockKline.trade_date.asc()).all()
+    
+    if len(data) < 120:
+        return {'stock_code': stock_code, 'stock_name': stock.name, 'signals': []}
+    
+    # 找起始年份的索引
+    start_idx = 0
+    for i, bar in enumerate(data):
+        if bar.trade_date.year >= start_year:
+            start_idx = i
+            break
+    
+    signals = []
+    
+    # macd_green_pullback 用波段法快速回测
+    if strategy_name == 'macd_green_pullback':
+        waves = _find_green_waves(data, min_days=3, tolerate_red=1)
+        
+        for i in range(1, len(waves)):
+            curr_wave = waves[i]
+            prev_wave = waves[i - 1]
+            
+            # 只统计起始年份之后的
+            if data[curr_wave['valley_idx']].trade_date.year < start_year:
+                continue
+            
+            # 底抬高：前低 < 现低
+            if prev_wave['min_low'] is None or curr_wave['min_low'] is None:
+                continue
+            if prev_wave['min_low'] >= curr_wave['min_low']:
+                continue
+            
+            valley_idx = curr_wave['valley_idx']
+            wave_end = curr_wave['end_idx']
+            
+            # 拐点后确认天数
+            confirm_days = 2
+            
+            # 找第一个满足条件的日期（拐点后confirm_days天，且在y_days内）
+            for j in range(valley_idx + confirm_days, min(valley_idx + y_days + 1, wave_end + 1)):
+                # 检查从谷到j是否连续缩短
+                is_shortening = True
+                for k in range(valley_idx + 1, j + 1):
+                    if data[k].macd is None or data[k - 1].macd is None:
+                        is_shortening = False
+                        break
+                    if data[k].macd < data[k - 1].macd:
+                        is_shortening = False
+                        break
+                
+                if is_shortening and j >= start_idx:
+                    # 找到第一个信号日
+                    bar = data[j]
+                    valley_date = data[valley_idx].trade_date.strftime('%Y-%m-%d')
+                    curr_date = bar.trade_date.strftime('%Y-%m-%d')
+                    
+                    strategy_name_str = (f'MACD绿柱拐点上升通道：最近{y_days}天内出现绿柱拐点，'
+                                        f'缩短{confirm_days}天确认，股价一底比一底高')
+                    
+                    signals.append({
+                        'date': curr_date,
+                        'close': float(bar.close) if bar.close else None,
+                        'strategy': strategy_name_str,
+                        'valley_date': valley_date,
+                        'valley_macd': float(curr_wave['valley_macd']) if curr_wave['valley_macd'] else None,
+                        'shortening_days': j - valley_idx,
+                        'current_min_low': float(curr_wave['min_low']),
+                        'current_min_low_date': curr_wave['min_low_date'].strftime('%Y-%m-%d'),
+                        'prev_min_low': float(prev_wave['min_low']),
+                        'prev_min_low_date': prev_wave['min_low_date'].strftime('%Y-%m-%d'),
+                        'low_diff_pct': round((float(curr_wave['min_low']) - float(prev_wave['min_low'])) / float(prev_wave['min_low']) * 100, 2),
+                        'details': {}
+                    })
+                    break  # 每个波段只取第一个信号日
+    else:
+        # 其他策略用逐日法（数据量不大，影响可接受）
+        prev_signal_date = None
+        for i in range(start_idx, len(data)):
+            data_slice = data[:i + 1]
+            data_reversed = list(reversed(data_slice))
+            
+            result = None
+            if strategy_name == 'consecutive_ma5':
+                result = check_strategy_consecutive_ma5(data_reversed, x_days, y_days, z_days)
+            elif strategy_name == 'rise_then_fall':
+                result = check_strategy_rise_then_fall(data_reversed, x_days, y_pct, z_days)
+            elif strategy_name == 'above_ma60':
+                result = check_strategy_above_ma60(data_reversed, y_days, z_days)
+            
+            if result:
+                signal_date = data[i].trade_date.strftime('%Y-%m-%d')
+                if signal_date != prev_signal_date:
+                    prev_signal_date = signal_date
+                    signals.append({
+                        'date': signal_date,
+                        'close': float(data[i].close) if data[i].close else None,
+                        **result
+                    })
+    
+    return {
+        'stock_code': stock_code,
+        'stock_name': stock.name,
+        'total_cap': float(stock.total_cap) if stock.total_cap else None,
+        'signals': signals,
+        'signal_count': len(signals)
+    }
