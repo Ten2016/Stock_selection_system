@@ -1,246 +1,45 @@
 from typing import List, Optional
 from sqlalchemy.orm import Session
-import time
 
 from app.models.stock import StockBasic
 from app.models.stock_kline import StockKline
+from .strategies.common import get_sorted_klines
+from .strategies.consecutive_ma5 import check_consecutive_ma5
+from .strategies.rise_then_fall import check_rise_then_fall
+from .strategies.above_ma60 import check_above_ma60
+from .strategies.macd_green_pullback import check_macd_green_pullback, _find_green_waves
 
 
-def check_strategy_consecutive_ma5(
-    data: List[StockKline],
-    x_days: int = 30,
-    y_days: int = 10,
-    z_days: int = 2
-) -> Optional[dict]:
-    """
-    检查是否满足策略：
-    - 从当前日期开始，往前最多找x天，在这些天中，找到第一个满足收盘价跌破布林下轨的日期
-    - 然后从这天开始再往后找，在y天内找到连续有z天收盘价都站上5天均线的票
-    从最新日期倒序找，找到第一个满足的即可
-    
-    :param data: 股票K线数据（按日期倒序排列）
-    :param x_days: 往前找x天
-    :param y_days: 往后找y天
-    :param z_days: 连续z天站上5日均线
-    :return: 如果满足条件返回策略信息，否则返回None
-    """
-    if len(data) < max(x_days, y_days, z_days) + 10:
-        return None
-    
-    # 转换为正序以便检查（索引0是最老的日期，索引-1是最新的日期）
-    sorted_data = sorted(data, key=lambda x: x.trade_date)
-    
-    # 获取最新日期的索引
-    latest_idx = len(sorted_data) - 1
-    
-    # 从最新日期往回找，在最近 x 天内找跌破布林下轨的位置
-    start_idx = max(0, latest_idx - x_days + 1)
-    for i in range(latest_idx, start_idx - 1, -1):
-        curr = sorted_data[i]
-        
-        # 检查是否跌破布林下轨
-        if (curr.close is not None and curr.boll_lower is not None and 
-            curr.close <= curr.boll_lower):
-            
-            # 找到跌破点，然后从这个日期往后（往更新的日期）找 y 天内连续 z 天站上 5 日线
-            # i是跌破点的索引，从i+1开始往后找，最多找 y 天
-            end_j = min(i + y_days, len(sorted_data) - 1)
-            
-            # 滑动窗口找连续 z 天
-            for j in range(i + 1, end_j - z_days + 2):
-                # 检查 j 到 j+z_days-1 这 z 天
-                all_above = True
-                matching_dates = []
-                matching_days = []
-                
-                for k in range(j, j + z_days):
-                    if k >= len(sorted_data):
-                        all_above = False
-                        break
-                    
-                    day = sorted_data[k]
-                    if (day.close is not None and day.ma5 is not None and 
-                        day.close >= day.ma5):
-                        matching_dates.append(day.trade_date.strftime('%Y-%m-%d'))
-                        matching_days.append(day)
-                    else:
-                        all_above = False
-                        break
-                
-                if all_above and len(matching_dates) == z_days:
-                    # 构建结果
-                    strategy_name = (f'往前 {x_days} 天内跌破布林下轨，'
-                                    f'之后 {y_days} 天内连续 {z_days} 天站上 5 日均线')
-                    
-                    result = {
-                        'strategy': strategy_name,
-                        'breakdown_date': curr.trade_date.strftime('%Y-%m-%d'),
-                        'breakdown_close': curr.close,
-                        'boll_lower': curr.boll_lower,
-                        'matching_dates': matching_dates,
-                        'details': {}
-                    }
-                    
-                    # 添加详细信息
-                    for idx, day in enumerate(matching_days):
-                        result['details'][f'day{idx + 1}_date'] = day.trade_date.strftime('%Y-%m-%d')
-                        result['details'][f'day{idx + 1}_close'] = day.close
-                        result['details'][f'day{idx + 1}_ma5'] = day.ma5
-                    
-                    return result
-    
-    return None
+STRATEGY_LIST = [
+    {
+        'name': 'consecutive_ma5',
+        'label': '跌破布林下轨后连续站MA5',
+        'description': '往前x天内跌破布林下轨，之后y天内连续z天站上5日均线',
+        'params': ['x_days', 'y_days', 'z_days']
+    },
+    {
+        'name': 'rise_then_fall',
+        'label': '大涨后连续下跌',
+        'description': '往前x天内涨幅大于y%，之后连续z天都是下跌',
+        'params': ['x_days', 'y_pct', 'z_days']
+    },
+    {
+        'name': 'above_ma60',
+        'label': '站上60日均线',
+        'description': '最近y天内有z天站上60日均线',
+        'params': ['y_days', 'z_days']
+    },
+    {
+        'name': 'macd_green_pullback',
+        'label': 'MACD绿柱拐点上升通道',
+        'description': '绿柱拐点后缩短确认，股价一底比一底高',
+        'params': ['y_days', 'confirm_days', 'min_wave_days', 'tolerate_red']
+    }
+]
 
 
-def check_strategy_rise_then_fall(
-    data: List[StockKline],
-    x_days: int = 30,
-    y_pct: float = 5.0,
-    z_days: int = 3
-) -> Optional[dict]:
-    """
-    检查是否满足策略：
-    - 从当前日期开始，往前最多找x天
-    - 对每一天做判断，查看当天收盘涨幅是否大于y%
-    - 且之后连续z天都是下跌（收盘价低于前一天）
-    - 找到第一个满足这一系列条件的日期就停止
-    
-    :param data: 股票K线数据（按日期倒序排列）
-    :param x_days: 往前找x天
-    :param y_pct: 当天收盘涨幅大于y%
-    :param z_days: 之后连续z天都是下跌
-    :return: 如果满足条件返回策略信息，否则返回None
-    """
-    if len(data) < x_days + z_days + 5:
-        return None
-    
-    # 转换为正序以便检查（索引0是最老的日期，索引-1是最新的日期）
-    sorted_data = sorted(data, key=lambda x: x.trade_date)
-    
-    # 获取最新日期的索引
-    latest_idx = len(sorted_data) - 1
-    
-    # 从最新日期往回找，在最近 x 天内找满足条件的日期
-    # 找到第一个满足"涨幅大于y% 且 之后连续z天下跌"的就停止
-    start_idx = max(0, latest_idx - x_days + 1)
-    
-    for i in range(latest_idx, start_idx - 1, -1):
-        curr = sorted_data[i]
-        
-        # 检查当天涨幅是否大于y%
-        if curr.change_pct is None or curr.change_pct <= y_pct:
-            continue
-        
-        # 涨幅满足，检查之后连续z天是否都是下跌
-        end_idx = i + z_days
-        
-        if end_idx >= len(sorted_data):
-            continue
-        
-        # 检查从i+1开始的连续z天是否都是下跌
-        all_fall = True
-        falling_dates = []
-        falling_days = []
-        
-        for k in range(i + 1, end_idx + 1):
-            if k >= len(sorted_data):
-                all_fall = False
-                break
-            
-            curr_day = sorted_data[k]
-            prev_day = sorted_data[k - 1]
-            
-            # 检查当天收盘价是否低于前一天
-            if (curr_day.close is not None and prev_day.close is not None and 
-                curr_day.close < prev_day.close):
-                falling_dates.append(curr_day.trade_date.strftime('%Y-%m-%d'))
-                falling_days.append(curr_day)
-            else:
-                all_fall = False
-                break
-        
-        # 如果满足所有条件，找到第一个就停止
-        if all_fall and len(falling_dates) == z_days:
-            strategy_name = (f'往前 {x_days} 天内涨幅大于 {y_pct}%，'
-                            f'之后连续 {z_days} 天都是下跌')
-            
-            result = {
-                'strategy': strategy_name,
-                'rise_date': curr.trade_date.strftime('%Y-%m-%d'),
-                'rise_pct': curr.change_pct,
-                'rise_close': curr.close,
-                'falling_dates': falling_dates,
-                'details': {}
-            }
-            
-            # 添加详细信息
-            for idx, day in enumerate(falling_days):
-                result['details'][f'fall_day{idx + 1}_date'] = day.trade_date.strftime('%Y-%m-%d')
-                result['details'][f'fall_day{idx + 1}_close'] = day.close
-                if idx > 0:
-                    prev_fall = falling_days[idx - 1]
-                    result['details'][f'fall_day{idx + 1}_change'] = round((day.close - prev_fall.close) / prev_fall.close * 100, 2)
-            
-            return result
-    
-    return None
-
-
-def check_strategy_above_ma60(
-    data: List[StockKline],
-    y_days: int = 20,
-    z_days: int = 10
-) -> Optional[dict]:
-    """
-    检查是否满足策略：
-    - 最近y天内，有z天收盘价站上60日均线
-    
-    :param data: 股票K线数据（按日期倒序排列）
-    :param y_days: 最近y天内
-    :param z_days: 有z天站上60日均线
-    :return: 如果满足条件返回策略信息，否则返回None
-    """
-    if len(data) < y_days + 60:
-        return None
-    
-    # 转换为正序（索引0是最老的日期，索引-1是最新的日期）
-    sorted_data = sorted(data, key=lambda x: x.trade_date)
-    
-    # 获取最近y天的数据
-    latest_idx = len(sorted_data) - 1
-    start_idx = max(0, latest_idx - y_days + 1)
-    
-    # 统计站上60日均线的天数
-    above_ma60_dates = []
-    above_ma60_days = []
-    
-    for i in range(start_idx, latest_idx + 1):
-        day = sorted_data[i]
-        if (day.close is not None and day.ma60 is not None and 
-            day.close >= day.ma60):
-            above_ma60_dates.append(day.trade_date.strftime('%Y-%m-%d'))
-            above_ma60_days.append(day)
-    
-    # 检查是否满足z天
-    if len(above_ma60_dates) >= z_days:
-        strategy_name = f'最近 {y_days} 天内有 {z_days} 天站上 60 日均线'
-        
-        result = {
-            'strategy': strategy_name,
-            'above_ma60_dates': above_ma60_dates,
-            'above_count': len(above_ma60_dates),
-            'details': {}
-        }
-        
-        # 添加详细信息（最多显示前10天）
-        for idx, day in enumerate(above_ma60_days[:10]):
-            result['details'][f'day{idx + 1}_date'] = day.trade_date.strftime('%Y-%m-%d')
-            result['details'][f'day{idx + 1}_close'] = day.close
-            result['details'][f'day{idx + 1}_ma60'] = day.ma60
-        
-        return result
-    
-    return None
+def get_available_strategies() -> List[dict]:
+    return STRATEGY_LIST
 
 
 def run_strategy_for_stock(
@@ -250,67 +49,35 @@ def run_strategy_for_stock(
     x_days: int = 30,
     y_days: int = 10,
     z_days: int = 2,
-    y_pct: float = 5.0
+    y_pct: float = 5.0,
+    confirm_days: int = 2,
+    min_wave_days: int = 3,
+    tolerate_red: int = 1
 ) -> Optional[dict]:
-    """
-    为单个股票运行策略
-    
-    :param db: 数据库会话
-    :param stock: 股票信息
-    :param strategy_name: 策略名称
-    :param x_days: 往前找x天
-    :param y_days: 往后找y天（用于consecutive_ma5策略）
-    :param z_days: 连续z天（用于两个策略）
-    :param y_pct: 涨幅大于y%（用于rise_then_fall策略）
-    :return: 策略结果
-    """
-    # 获取足够的K线数据（倒序）
-    max_days = max(x_days, y_days, z_days) + 200
-    data = db.query(StockKline).filter(
-        StockKline.stock_code == stock.code
-    ).order_by(StockKline.trade_date.desc()).limit(max_days).all()
-    
-    if len(data) < 20:
+    klines = get_sorted_klines(stock.code, db)
+
+    if len(klines) < 20:
         return None
-    
-    # 运行策略
+
+    result = None
+
     if strategy_name == 'consecutive_ma5':
-        result = check_strategy_consecutive_ma5(data, x_days, y_days, z_days)
-        if result:
-            return {
-                'code': stock.code,
-                'name': stock.name,
-                'total_cap': stock.total_cap,
-                'result': result
-            }
+        result = check_consecutive_ma5(klines, x_days, y_days, z_days)
     elif strategy_name == 'rise_then_fall':
-        result = check_strategy_rise_then_fall(data, x_days, y_pct, z_days)
-        if result:
-            return {
-                'code': stock.code,
-                'name': stock.name,
-                'total_cap': stock.total_cap,
-                'result': result
-            }
+        result = check_rise_then_fall(klines, x_days, y_pct, z_days)
     elif strategy_name == 'above_ma60':
-        result = check_strategy_above_ma60(data, y_days, z_days)
-        if result:
-            return {
-                'code': stock.code,
-                'name': stock.name,
-                'total_cap': stock.total_cap,
-                'result': result
-            }
+        result = check_above_ma60(klines, y_days, z_days)
     elif strategy_name == 'macd_green_pullback':
-        result = check_strategy_macd_green_pullback(data, y_days=y_days)
-        if result:
-            return {
-                'code': stock.code,
-                'name': stock.name,
-                'total_cap': stock.total_cap,
-                'result': result
-            }
-    
+        result = check_macd_green_pullback(klines, y_days, confirm_days, min_wave_days, tolerate_red)
+
+    if result:
+        return {
+            'code': stock.code,
+            'name': stock.name,
+            'total_cap': stock.total_cap,
+            'result': result
+        }
+
     return None
 
 
@@ -321,225 +88,37 @@ def run_strategy(
     x_days: int = 30,
     y_days: int = 10,
     z_days: int = 2,
-    y_pct: float = 5.0
-) -> List[dict]:
-    """
-    运行选股策略
-    
-    :param db: 数据库会话
-    :param strategy_name: 策略名称
-    :param min_market_cap: 最小市值（亿元）
-    :param x_days: 往前找x天
-    :param y_days: 往后找y天（用于consecutive_ma5策略）
-    :param z_days: 连续z天（用于两个策略）
-    :param y_pct: 涨幅大于y%（用于rise_then_fall策略）
-    :return: 策略结果列表
-    """
-    # 获取所有股票
-    query = db.query(StockBasic)
-    
-    # 如果有最小市值筛选，添加条件
-    if min_market_cap:
-        # 数据库单位是亿元，直接比较
-        query = query.filter(StockBasic.total_cap >= min_market_cap)
-    
-    stocks = query.all()
-    
-    results = []
-    total_count = len(stocks)
-    
-    # 遍历所有股票
-    for idx, stock in enumerate(stocks):
-        time.sleep(0.01)  # 避免太频繁
-        
-        result = run_strategy_for_stock(db, stock, strategy_name, x_days, y_days, z_days, y_pct)
-        if result:
-            results.append(result)
-        
-        # 每处理100个股票打印进度，或处理完最后一个时打印
-        if (idx + 1) % 100 == 0 or idx + 1 == total_count:
-            print(f"已处理 {idx + 1}/{total_count} 股票，找到 {len(results)} 个符合条件的")
-    
-    # 按总市值倒序排列
-    results.sort(key=lambda x: float(x.get('total_cap') or 0), reverse=True)
-    
-    return results
-
-
-def get_available_strategies() -> List[dict]:
-    """
-    获取可用策略列表
-    
-    :return: 策略列表
-    """
-    return [
-        {
-            'name': 'consecutive_ma5',
-            'display_name': '跌破布林下轨后连续站上5日线',
-            'description': '从当前日期开始，往回扫描最多x天，找到第一个跌破布林下轨的日期，然后从这天开始再往后找，在y天内找到连续有z天收盘价都站上5天均线的票'
-        },
-        {
-            'name': 'rise_then_fall',
-            'display_name': '大涨后连续下跌',
-            'description': '针对总市值大于p亿的股票，从当前日期往回扫描最多x天，找到第一个满足当天收盘涨幅大于y%且之后连续z天都是下跌的日期'
-        },
-        {
-            'name': 'above_ma60',
-            'display_name': '站上60日均线',
-            'description': '针对总市值大于x亿的股票，在最近y天内，有z天收盘价站上60日均线'
-        },
-        {
-            'name': 'macd_green_pullback',
-            'display_name': 'MACD绿柱拐点上升通道',
-            'description': '上升趋势中，MACD绿柱刚从最高点开始缩短（拐点出现），且上一个绿柱波段的股价最低点比当前绿柱波段的股价最低点更低（一底比一底高）'
-        }
-    ]
-
-
-def _find_green_waves(sorted_data, min_days=3, tolerate_red=1):
-    """
-    识别绿柱波段
-    
-    :param sorted_data: 按日期正序排列的K线数据
-    :param min_days: 最少连续绿柱天数才算有效波段
-    :param tolerate_red: 中间容忍的红柱天数（夹在中间不算断开）
-    :return: 绿柱波段列表，每个波段是 {start_idx, end_idx, valley_idx, valley_macd, min_low, min_low_date}
-    """
-    waves = []
-    n = len(sorted_data)
-    i = 0
-    
-    while i < n:
-        if sorted_data[i].macd is not None and sorted_data[i].macd < 0:
-            start_idx = i
-            end_idx = i
-            valley_idx = i
-            valley_macd = sorted_data[i].macd
-            min_low = sorted_data[i].low
-            min_low_date = sorted_data[i].trade_date
-            red_streak = 0
-            j = i + 1
-            
-            while j < n:
-                bar = sorted_data[j]
-                if bar.macd is not None and bar.macd < 0:
-                    red_streak = 0
-                    end_idx = j
-                    if bar.macd < valley_macd:
-                        valley_idx = j
-                        valley_macd = bar.macd
-                    if bar.low is not None and bar.low < min_low:
-                        min_low = bar.low
-                        min_low_date = bar.trade_date
-                    j += 1
-                else:
-                    red_streak += 1
-                    if red_streak > tolerate_red:
-                        break
-                    j += 1
-            
-            if end_idx - start_idx + 1 >= min_days:
-                waves.append({
-                    'start_idx': start_idx,
-                    'end_idx': end_idx,
-                    'valley_idx': valley_idx,
-                    'valley_macd': valley_macd,
-                    'min_low': min_low,
-                    'min_low_date': min_low_date,
-                })
-            
-            i = j
-        else:
-            i += 1
-    
-    return waves
-
-
-def check_strategy_macd_green_pullback(
-    data,
-    y_days: int = 5,
+    y_pct: float = 5.0,
     confirm_days: int = 2,
     min_wave_days: int = 3,
     tolerate_red: int = 1
-):
-    """
-    MACD绿柱拐点上升通道策略
-    
-    条件：
-    1. 当前处于绿柱缩短阶段（最新一天macd < 0，且绿柱在缩短）
-    2. 最近y天内出现绿柱拐点（谷），且之后至少有confirm_days确认缩短
-    3. 上一个绿柱波段的股价最低点 < 当前绿柱波段的股价最低点（一底比一底高）
-    
-    :param data: 股票K线数据（按日期倒序排列）
-    :param y_days: 最近y天内出现拐点
-    :param confirm_days: 拐点后需要确认缩短的天数
-    :param min_wave_days: 绿柱波段最少天数
-    :param tolerate_red: 绿柱波段中间容忍的红柱天数
-    :return: 如果满足条件返回策略信息，否则返回None
-    """
-    if len(data) < 120:
-        return None
-    
-    sorted_data = sorted(data, key=lambda x: x.trade_date)
-    n = len(sorted_data)
-    latest_idx = n - 1
-    
-    waves = _find_green_waves(sorted_data, min_days=min_wave_days, tolerate_red=tolerate_red)
-    
-    if len(waves) < 2:
-        return None
-    
-    current_wave = waves[-1]
-    
-    if current_wave['end_idx'] != latest_idx:
-        return None
-    
-    valley_idx = current_wave['valley_idx']
-    
-    if latest_idx - valley_idx < confirm_days:
-        return None
-    
-    if latest_idx - valley_idx > y_days:
-        return None
-    
-    shortening = True
-    for k in range(valley_idx + 1, latest_idx + 1):
-        if sorted_data[k].macd is None or sorted_data[k - 1].macd is None:
-            shortening = False
-            break
-        if sorted_data[k].macd < sorted_data[k - 1].macd:
-            shortening = False
-            break
-    
-    if not shortening:
-        return None
-    
-    prev_wave = waves[-2]
-    
-    if prev_wave['min_low'] is None or current_wave['min_low'] is None:
-        return None
-    
-    if prev_wave['min_low'] >= current_wave['min_low']:
-        return None
-    
-    valley_date = sorted_data[valley_idx].trade_date.strftime('%Y-%m-%d')
-    valley_macd_val = float(current_wave['valley_macd']) if current_wave['valley_macd'] is not None else None
-    
-    strategy_name = (f'MACD绿柱拐点上升通道：最近{y_days}天内出现绿柱拐点，'
-                     f'缩短{confirm_days}天确认，股价一底比一底高')
-    
-    return {
-        'strategy': strategy_name,
-        'valley_date': valley_date,
-        'valley_macd': valley_macd_val,
-        'shortening_days': latest_idx - valley_idx,
-        'current_min_low': float(current_wave['min_low']),
-        'current_min_low_date': current_wave['min_low_date'].strftime('%Y-%m-%d'),
-        'prev_min_low': float(prev_wave['min_low']),
-        'prev_min_low_date': prev_wave['min_low_date'].strftime('%Y-%m-%d'),
-        'low_diff_pct': round((float(current_wave['min_low']) - float(prev_wave['min_low'])) / float(prev_wave['min_low']) * 100, 2),
-        'details': {}
-    }
+) -> List[dict]:
+    query = db.query(StockBasic)
+
+    if min_market_cap is not None:
+        query = query.filter(StockBasic.total_cap >= min_market_cap * 100000000)
+
+    stocks = query.all()
+
+    results = []
+    for stock in stocks:
+        try:
+            result = run_strategy_for_stock(
+                db, stock, strategy_name,
+                x_days=x_days,
+                y_days=y_days,
+                z_days=z_days,
+                y_pct=y_pct,
+                confirm_days=confirm_days,
+                min_wave_days=min_wave_days,
+                tolerate_red=tolerate_red
+            )
+            if result:
+                results.append(result)
+        except Exception:
+            continue
+
+    return results
 
 
 def backtest_strategy(
@@ -550,127 +129,112 @@ def backtest_strategy(
     x_days: int = 30,
     y_days: int = 10,
     z_days: int = 2,
-    y_pct: float = 5.0
+    y_pct: float = 5.0,
+    confirm_days: int = 2,
+    min_wave_days: int = 3,
+    tolerate_red: int = 1
 ) -> dict:
-    """
-    回测单只股票的策略，返回历史所有买点
-    
-    :param db: 数据库会话
-    :param stock_code: 股票代码
-    :param strategy_name: 策略名称
-    :param start_year: 从哪一年开始回测
-    :param x_days: 策略参数x
-    :param y_days: 策略参数y
-    :param z_days: 策略参数z
-    :param y_pct: 策略参数y_pct
-    :return: 回测结果 { stock_code, stock_name, signals: [...] }
-    """
     stock = db.query(StockBasic).filter(StockBasic.code == stock_code).first()
+
     if not stock:
         return {'stock_code': stock_code, 'stock_name': '', 'signals': []}
-    
-    # 获取所有K线数据（正序）
-    data = db.query(StockKline).filter(
-        StockKline.stock_code == stock_code
-    ).order_by(StockKline.trade_date.asc()).all()
-    
-    if len(data) < 120:
+
+    klines = get_sorted_klines(stock_code, db, max_days=1500)
+
+    if len(klines) < 120:
         return {'stock_code': stock_code, 'stock_name': stock.name, 'signals': []}
-    
-    # 找起始年份的索引
-    start_idx = 0
-    for i, bar in enumerate(data):
-        if bar.trade_date.year >= start_year:
-            start_idx = i
-            break
-    
+
+    start_idx = next((i for i, bar in enumerate(klines) if bar.trade_date.year >= start_year), 0)
+
     signals = []
-    
-    # macd_green_pullback 用波段法快速回测
+    prev_signal_date = None
+
     if strategy_name == 'macd_green_pullback':
-        waves = _find_green_waves(data, min_days=3, tolerate_red=1)
-        
-        for i in range(1, len(waves)):
-            curr_wave = waves[i]
-            prev_wave = waves[i - 1]
-            
-            # 只统计起始年份之后的
-            if data[curr_wave['valley_idx']].trade_date.year < start_year:
+        waves = _find_green_waves(klines, min_days=min_wave_days, tolerate_red=tolerate_red)
+
+        for wave_idx, wave in enumerate(waves):
+            if wave_idx == 0:
                 continue
-            
-            # 底抬高：前低 < 现低
-            if prev_wave['min_low'] is None or curr_wave['min_low'] is None:
+
+            prev_wave = waves[wave_idx - 1]
+            valley_idx = wave['valley_idx']
+
+            if klines[valley_idx].trade_date.year < start_year:
                 continue
-            if prev_wave['min_low'] >= curr_wave['min_low']:
+
+            if wave['min_low'] is None or prev_wave['min_low'] is None:
                 continue
-            
-            valley_idx = curr_wave['valley_idx']
-            wave_end = curr_wave['end_idx']
-            
-            # 拐点后确认天数
-            confirm_days = 2
-            
-            # 找第一个满足条件的日期（拐点后confirm_days天，且在y_days内）
-            for j in range(valley_idx + confirm_days, min(valley_idx + y_days + 1, wave_end + 1)):
-                # 检查从谷到j是否连续缩短
+
+            if wave['min_low'] <= prev_wave['min_low']:
+                continue
+
+            for j in range(valley_idx + confirm_days, min(valley_idx + y_days + 1, len(klines))):
+                if klines[j].macd is None or klines[j - 1].macd is None:
+                    continue
+
                 is_shortening = True
                 for k in range(valley_idx + 1, j + 1):
-                    if data[k].macd is None or data[k - 1].macd is None:
+                    if klines[k].macd is None or klines[k - 1].macd is None:
                         is_shortening = False
                         break
-                    if data[k].macd < data[k - 1].macd:
+                    if klines[k].macd < klines[k - 1].macd:
                         is_shortening = False
                         break
-                
-                if is_shortening and j >= start_idx:
-                    # 找到第一个信号日
-                    bar = data[j]
-                    valley_date = data[valley_idx].trade_date.strftime('%Y-%m-%d')
+
+                if is_shortening:
+                    bar = klines[j]
+                    valley_date = klines[valley_idx].trade_date.strftime('%Y-%m-%d')
                     curr_date = bar.trade_date.strftime('%Y-%m-%d')
-                    
+
                     strategy_name_str = (f'MACD绿柱拐点上升通道：最近{y_days}天内出现绿柱拐点，'
                                         f'缩短{confirm_days}天确认，股价一底比一底高')
-                    
+
+                    low_diff_pct = None
+                    if wave['min_low'] and prev_wave['min_low']:
+                        low_diff_pct = round(
+                            (float(wave['min_low']) - float(prev_wave['min_low'])) / float(prev_wave['min_low']) * 100, 2
+                        )
+
                     signals.append({
                         'date': curr_date,
                         'close': float(bar.close) if bar.close else None,
                         'strategy': strategy_name_str,
                         'valley_date': valley_date,
-                        'valley_macd': float(curr_wave['valley_macd']) if curr_wave['valley_macd'] else None,
+                        'valley_macd': float(wave['valley_macd']) if wave['valley_macd'] is not None else None,
                         'shortening_days': j - valley_idx,
-                        'current_min_low': float(curr_wave['min_low']),
-                        'current_min_low_date': curr_wave['min_low_date'].strftime('%Y-%m-%d'),
+                        'current_min_low': float(wave['min_low']),
+                        'current_min_low_date': wave['min_low_date'].strftime('%Y-%m-%d'),
                         'prev_min_low': float(prev_wave['min_low']),
                         'prev_min_low_date': prev_wave['min_low_date'].strftime('%Y-%m-%d'),
-                        'low_diff_pct': round((float(curr_wave['min_low']) - float(prev_wave['min_low'])) / float(prev_wave['min_low']) * 100, 2),
+                        'low_diff_pct': low_diff_pct,
                         'details': {}
                     })
-                    break  # 每个波段只取第一个信号日
+                    break
     else:
-        # 其他策略用逐日法（数据量不大，影响可接受）
-        prev_signal_date = None
-        for i in range(start_idx, len(data)):
-            data_slice = data[:i + 1]
-            data_reversed = list(reversed(data_slice))
-            
-            result = None
-            if strategy_name == 'consecutive_ma5':
-                result = check_strategy_consecutive_ma5(data_reversed, x_days, y_days, z_days)
-            elif strategy_name == 'rise_then_fall':
-                result = check_strategy_rise_then_fall(data_reversed, x_days, y_pct, z_days)
-            elif strategy_name == 'above_ma60':
-                result = check_strategy_above_ma60(data_reversed, y_days, z_days)
-            
-            if result:
-                signal_date = data[i].trade_date.strftime('%Y-%m-%d')
-                if signal_date != prev_signal_date:
-                    prev_signal_date = signal_date
-                    signals.append({
-                        'date': signal_date,
-                        'close': float(data[i].close) if data[i].close else None,
-                        **result
-                    })
-    
+        check_func = None
+        if strategy_name == 'consecutive_ma5':
+            check_func = lambda data: check_consecutive_ma5(data, x_days, y_days, z_days)
+        elif strategy_name == 'rise_then_fall':
+            check_func = lambda data: check_rise_then_fall(data, x_days, y_pct, z_days)
+        elif strategy_name == 'above_ma60':
+            check_func = lambda data: check_above_ma60(data, y_days, z_days)
+
+        if check_func:
+            for i in range(start_idx, len(klines)):
+                data_slice = klines[:i + 1]
+                result = check_func(data_slice)
+
+                if result:
+                    signal_date = klines[i].trade_date.strftime('%Y-%m-%d')
+
+                    if signal_date != prev_signal_date:
+                        prev_signal_date = signal_date
+                        signals.append({
+                            'date': signal_date,
+                            'close': float(klines[i].close) if klines[i].close else None,
+                            **result
+                        })
+
     return {
         'stock_code': stock_code,
         'stock_name': stock.name,

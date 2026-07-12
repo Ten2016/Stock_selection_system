@@ -358,24 +358,23 @@ const runStrategy = async () => {
 const viewStock = (row) => { selectedStockCode.value = row.code; selectedStockResult.value = row.result; backtestSignals.value = []; chartDialogVisible.value = true }
 
 // 股票搜索
-const handleSearch = async (keyword) => {
-  if (!keyword || keyword.length < 1) {
-    searchSuggestions.value = []
+const handleSearch = (queryString, callback) => {
+  if (!queryString || queryString.length < 1) {
+    callback([])
     return
   }
-  try {
-    const res = await searchStocks(keyword, 20)
+  searchStocks(queryString, 20).then(res => {
     const list = res.data?.list || []
-    searchSuggestions.value = list.map(s => ({
+    const suggestions = list.map(s => ({
       value: `${s.code} ${s.name}`,
       code: s.code,
       name: s.name,
       total_cap: s.total_cap
     }))
-  } catch (error) {
-    console.error('搜索失败:', error)
-    searchSuggestions.value = []
-  }
+    callback(suggestions)
+  }).catch(() => {
+    callback([])
+  })
 }
 
 const onSelectStock = (item) => {
