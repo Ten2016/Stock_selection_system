@@ -2,7 +2,7 @@ from collections import OrderedDict
 from pathlib import Path
 from sqlalchemy import inspect, text
 
-CHECK_TABLES = ["stock_basic", "stock_kline", "strategy", "strategy_result", "sync_record", "selection_result"]
+CHECK_TABLES = ["stock_basic", "stock_kline", "strategy_result", "sync_record"]
 
 
 def ensure_sqlite_database_path(database_url: str):

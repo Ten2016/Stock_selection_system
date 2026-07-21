@@ -1,38 +1,60 @@
+"""站上 60 日均线（中期趋势确认）。
+
+思路：最近 y 天里，只要有 z 天收盘价站在 MA60 之上，
+说明中期趋势已经转强或正在转强。
+"""
+
 from typing import List, Optional
 
-from app.models.stock_kline import StockKline
+from .base import BaseStrategy, ParamSpec, StrategyMeta, tag
 
 
-def check_above_ma60(klines: List[StockKline], y_days: int = 20, z_days: int = 10) -> Optional[dict]:
-    if len(klines) < y_days + 60:
-        return None
+class AboveMa60Strategy(BaseStrategy):
+    meta = StrategyMeta(
+        name='above_ma60',
+        display_name='站上60日均线',
+        description='最近 y 天内有 z 天站上 60 日均线',
+        params=[
+            ParamSpec('y_days', '最近', 5, '天内', minimum=1, maximum=500),
+            ParamSpec('z_days', '有', 3, '天站上 60 日均线', minimum=1, maximum=500),
+        ],
+    )
 
-    latest_idx = len(klines) - 1
-    start_idx = max(0, latest_idx - y_days + 1)
+    # MA60 需要 60 根才有值，再加上观察窗口
+    min_klines = 80
 
-    above_ma60_dates = []
+    def check(self, klines: List, y_days: int = 5, z_days: int = 3) -> Optional[dict]:
+        if len(klines) < y_days + 60:
+            return None
+        if z_days > y_days:
+            return None
 
-    for i in range(start_idx, latest_idx + 1):
-        day = klines[i]
-        if (day.close is not None and day.ma60 is not None and
-                day.close >= day.ma60):
-            above_ma60_dates.append(day.trade_date.strftime('%Y-%m-%d'))
+        window = klines[max(0, len(klines) - y_days):]
+        above = [
+            bar for bar in window
+            if bar.close is not None and bar.ma60 is not None and bar.close >= bar.ma60
+        ]
 
-    if len(above_ma60_dates) >= z_days:
-        strategy_name = f'最近 {y_days} 天内有 {z_days} 天站上 60 日均线'
+        if len(above) < z_days:
+            return None
 
-        result = {
-            'strategy': strategy_name,
-            'above_ma60_dates': above_ma60_dates,
-            'above_count': len(above_ma60_dates),
-            'details': {}
+        above_dates = [bar.trade_date.strftime('%Y-%m-%d') for bar in above]
+        details = {}
+        for idx, bar in enumerate(window[:10], start=1):
+            details[f'day{idx}_date'] = bar.trade_date.strftime('%Y-%m-%d')
+            details[f'day{idx}_close'] = bar.close
+            details[f'day{idx}_ma60'] = bar.ma60
+
+        return {
+            'strategy': f'最近 {y_days} 天内有 {z_days} 天站上 60 日均线',
+            'above_ma60_dates': above_dates,
+            'above_count': len(above_dates),
+            'tags': [
+                tag(f'站上60日线 {len(above_dates)} 天', 'success'),
+                *[tag(d, 'info') for d in above_dates],
+            ],
+            'details': details,
         }
 
-        for idx, day in enumerate(klines[start_idx:start_idx + 10]):
-            result['details'][f'day{idx + 1}_date'] = day.trade_date.strftime('%Y-%m-%d')
-            result['details'][f'day{idx + 1}_close'] = day.close
-            result['details'][f'day{idx + 1}_ma60'] = day.ma60
 
-        return result
-
-    return None
+STRATEGY = AboveMa60Strategy()

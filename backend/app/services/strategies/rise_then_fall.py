@@ -1,66 +1,74 @@
+"""大涨之后连续下跌（回调买点）。
+
+思路：在近 x 天内找到一根涨幅超过 y% 的大阳线，
+之后紧接着连续 z 天收盘价逐日走低，视为放量拉升后的健康回调。
+"""
+
 from typing import List, Optional
 
-from app.models.stock_kline import StockKline
+from .base import BaseStrategy, ParamSpec, StrategyMeta, tag
 
 
-def check_rise_then_fall(klines: List[StockKline], x_days: int = 30, y_pct: float = 5.0, z_days: int = 3) -> Optional[dict]:
-    if len(klines) < x_days + z_days + 5:
-        return None
+class RiseThenFallStrategy(BaseStrategy):
+    meta = StrategyMeta(
+        name='rise_then_fall',
+        display_name='大涨后连续下跌',
+        description='往前 x 天内涨幅大于 y%，之后连续 z 天都是下跌',
+        params=[
+            ParamSpec('x_days', '往前', 30, '天', minimum=1, maximum=500),
+            ParamSpec('y_pct', '涨幅大于', 5.0, '%', param_type='float', minimum=0.1, maximum=100, step=0.5),
+            ParamSpec('z_days', '连续', 3, '天下跌', minimum=1, maximum=100),
+        ],
+    )
 
-    latest_idx = len(klines) - 1
-    start_idx = max(0, latest_idx - x_days + 1)
+    def check(self, klines: List, x_days: int = 30, y_pct: float = 5.0, z_days: int = 3) -> Optional[dict]:
+        if len(klines) < x_days + z_days + 5:
+            return None
 
-    for i in range(latest_idx, start_idx - 1, -1):
-        curr = klines[i]
+        latest_idx = len(klines) - 1
+        earliest_idx = max(0, latest_idx - x_days + 1)
 
-        if curr.change_pct is not None and curr.change_pct > y_pct:
-            end_idx = i + z_days
-
-            if end_idx >= len(klines):
+        for i in range(latest_idx, earliest_idx - 1, -1):
+            rise_bar = klines[i]
+            if rise_bar.change_pct is None or rise_bar.change_pct <= y_pct:
                 continue
 
-            all_fall = True
-            falling_dates = []
+            end_idx = i + z_days
+            if end_idx > latest_idx:
+                continue
 
-            for k in range(i + 1, end_idx + 1):
-                if k >= len(klines):
-                    all_fall = False
-                    break
+            falling = klines[i + 1:end_idx + 1]
+            if not all(
+                bar.close is not None and prev.close is not None and bar.close < prev.close
+                for prev, bar in zip(klines[i:end_idx], falling)
+            ):
+                continue
 
-                curr_day = klines[k]
-                prev_day = klines[k - 1]
+            falling_dates = [bar.trade_date.strftime('%Y-%m-%d') for bar in falling]
+            details = {}
+            for idx, bar in enumerate(falling, start=1):
+                details[f'fall_day{idx}_date'] = bar.trade_date.strftime('%Y-%m-%d')
+                details[f'fall_day{idx}_close'] = bar.close
+                prev_close = klines[i + idx - 1].close
+                if idx > 1 and prev_close and bar.close:
+                    details[f'fall_day{idx}_change'] = round(
+                        (bar.close - prev_close) / prev_close * 100, 2
+                    )
 
-                if (curr_day.close is not None and prev_day.close is not None and
-                        curr_day.close < prev_day.close):
-                    falling_dates.append(curr_day.trade_date.strftime('%Y-%m-%d'))
-                else:
-                    all_fall = False
-                    break
+            return {
+                'strategy': f'往前 {x_days} 天内涨幅大于 {y_pct}%，之后连续 {z_days} 天都是下跌',
+                'rise_date': rise_bar.trade_date.strftime('%Y-%m-%d'),
+                'rise_pct': rise_bar.change_pct,
+                'rise_close': rise_bar.close,
+                'falling_dates': falling_dates,
+                'tags': [
+                    tag(f'大涨 {rise_bar.trade_date.strftime("%Y-%m-%d")} ({rise_bar.change_pct}%)', 'danger'),
+                    *[tag(d, 'info') for d in falling_dates],
+                ],
+                'details': details,
+            }
 
-            if all_fall and len(falling_dates) == z_days:
-                strategy_name = (f'往前 {x_days} 天内涨幅大于 {y_pct}%，'
-                                f'之后连续 {z_days} 天都是下跌')
+        return None
 
-                result = {
-                    'strategy': strategy_name,
-                    'rise_date': curr.trade_date.strftime('%Y-%m-%d'),
-                    'rise_pct': curr.change_pct,
-                    'rise_close': curr.close,
-                    'falling_dates': falling_dates,
-                    'details': {}
-                }
 
-                for idx, day in enumerate(falling_dates):
-                    result['details'][f'fall_day{idx + 1}_date'] = day
-                    result['details'][f'fall_day{idx + 1}_close'] = klines[i + 1 + idx].close
-                    if idx > 0:
-                        prev_close = klines[i + idx].close
-                        curr_close = klines[i + 1 + idx].close
-                        if prev_close and curr_close:
-                            result['details'][f'fall_day{idx + 1}_change'] = round(
-                                (curr_close - prev_close) / prev_close * 100, 2
-                            )
-
-                return result
-
-    return None
+STRATEGY = RiseThenFallStrategy()

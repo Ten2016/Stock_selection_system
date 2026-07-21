@@ -38,29 +38,22 @@ class StockKline(Base):
     dividend_info = Column(LenientJSON)
     created_at = Column(TIMESTAMP, server_default=func.now())
 
+    # MACD / 涨跌幅等指标 0 是合法值，必须用 is not None 判空，否则会被吞成 null 导致图上断线
+    _FLOAT_FIELDS = (
+        "open", "high", "low", "close", "volume", "amount",
+        "amplitude", "change_pct", "turnover_rate",
+        "ma5", "ma10", "ma20", "ma30", "ma60",
+        "boll_upper", "boll_mid", "boll_lower",
+        "dif", "dea", "macd",
+    )
+
     def to_dict(self):
-        return {
+        result = {
             "stock_code": self.stock_code,
             "trade_date": self.trade_date.isoformat() if self.trade_date else None,
-            "open": float(self.open) if self.open else None,
-            "high": float(self.high) if self.high else None,
-            "low": float(self.low) if self.low else None,
-            "close": float(self.close) if self.close else None,
-            "volume": float(self.volume) if self.volume else None,
-            "amount": float(self.amount) if self.amount else None,
-            "amplitude": float(self.amplitude) if self.amplitude else None,
-            "change_pct": float(self.change_pct) if self.change_pct else None,
-            "turnover_rate": float(self.turnover_rate) if self.turnover_rate else None,
-            "ma5": float(self.ma5) if self.ma5 else None,
-            "ma10": float(self.ma10) if self.ma10 else None,
-            "ma20": float(self.ma20) if self.ma20 else None,
-            "ma30": float(self.ma30) if self.ma30 else None,
-            "ma60": float(self.ma60) if self.ma60 else None,
-            "boll_upper": float(self.boll_upper) if self.boll_upper else None,
-            "boll_mid": float(self.boll_mid) if self.boll_mid else None,
-            "boll_lower": float(self.boll_lower) if self.boll_lower else None,
-            "dif": float(self.dif) if self.dif else None,
-            "dea": float(self.dea) if self.dea else None,
-            "macd": float(self.macd) if self.macd else None,
             "dividend_info": self.dividend_info,
         }
+        for field in self._FLOAT_FIELDS:
+            value = getattr(self, field)
+            result[field] = float(value) if value is not None else None
+        return result

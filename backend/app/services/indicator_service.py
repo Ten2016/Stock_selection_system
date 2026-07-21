@@ -1,12 +1,5 @@
 import pandas as pd
-import numpy as np
-from typing import List, Dict, Any, Optional, Tuple
-
-
-def calculate_ma(prices: List[float], window: int) -> List[Optional[float]]:
-    s = pd.Series(prices)
-    ma = s.rolling(window=window).mean()
-    return ma.round(2).tolist()
+from typing import Tuple
 
 
 def calculate_ema(prices: pd.Series, period: int) -> pd.Series:
@@ -25,28 +18,6 @@ def calculate_macd(
     dea = calculate_ema(dif, signal)
     macd_hist = 2 * (dif - dea)
     return dif, dea, macd_hist
-
-
-def calculate_bollinger_bands(
-    closes: List[float],
-    ma_values: List[Optional[float]],
-    period: int = 20,
-    std_dev_multiplier: int = 2
-):
-    s = pd.Series(closes)
-    std = s.rolling(window=period).std()
-    upper = []
-    lower = []
-    for i in range(len(closes)):
-        ma = ma_values[i] if i < len(ma_values) else None
-        std_val = std.iloc[i] if i < len(std) else None
-        if ma is not None and std_val is not None and not pd.isna(std_val):
-            upper.append(round(float(ma + std_dev_multiplier * std_val), 2))
-            lower.append(round(float(ma - std_dev_multiplier * std_val), 2))
-        else:
-            upper.append(None)
-            lower.append(None)
-    return upper, lower
 
 
 def calculate_all_indicators(df: pd.DataFrame) -> pd.DataFrame:

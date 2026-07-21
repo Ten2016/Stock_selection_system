@@ -43,15 +43,24 @@ def get_kline_data(db: Session, stock_code: str, start_date: Optional[date] = No
     return query.order_by(StockKline.trade_date).all()
 
 
-def get_stock_kline_date_range(db: Session, stock_code: str):
-    result = db.query(
+def get_kline_date_ranges(db: Session, stock_codes: list):
+    """批量获取多只股票的 K 线日期区间，返回 {code: {...}}。列表页用，避免逐行查询。"""
+    if not stock_codes:
+        return {}
+    rows = db.query(
+        StockKline.stock_code,
         func.min(StockKline.trade_date).label('min_date'),
         func.max(StockKline.trade_date).label('max_date'),
-        func.count(StockKline.id).label('count')
-    ).filter(StockKline.stock_code == stock_code).first()
-    if result and result.count > 0:
-        return {'min_date': str(result.min_date) if result.min_date else None, 'max_date': str(result.max_date) if result.max_date else None, 'count': result.count}
-    return None
+        func.count(StockKline.id).label('count'),
+    ).filter(StockKline.stock_code.in_(stock_codes)).group_by(StockKline.stock_code).all()
+    return {
+        row.stock_code: {
+            'min_date': str(row.min_date) if row.min_date else None,
+            'max_date': str(row.max_date) if row.max_date else None,
+            'count': row.count,
+        }
+        for row in rows if row.count > 0
+    }
 
 
 def clear_stock_kline_data(db: Session, stock_code: str):

@@ -21,19 +21,15 @@ async def get_stocks(
     db: Session = Depends(get_db)
 ):
     stocks, total = stock_service.get_stock_list(db, skip=skip, limit=limit, min_market_cap=min_market_cap, search=search, sort_by=sort_by, sort_order=sort_order)
-    
+
+    date_ranges = stock_service.get_kline_date_ranges(db, [s.code for s in stocks])
+
     result = []
     for stock in stocks:
         stock_dict = stock.to_dict()
-        
-        date_range = stock_service.get_stock_kline_date_range(db, stock.code)
-        if date_range:
-            stock_dict['kline_date_range'] = date_range
-        else:
-            stock_dict['kline_date_range'] = None
-        
+        stock_dict['kline_date_range'] = date_ranges.get(stock.code)
         result.append(stock_dict)
-    
+
     return success(data={
         "list": result,
         "total": total,

@@ -19,34 +19,69 @@ FETCH_WORKERS = 4
 SAVE_QUEUE_MAXSIZE = 30
 BATCH_SAVE_SIZE = 40
 
+# 同步区间向前扩展的天数：覆盖节假日/周末，保证与库中已有数据存在重叠日，
+# 复权漂移检测依赖这段重叠来判断历史价格是否已失效。
+SYNC_BUFFER_DAYS = 10
+
+# 指标上下文预加载天数（不写库，仅参与 MA60/MACD 计算）
+INDICATOR_CONTEXT_DAYS = 120
+
 
 class SyncRequest(BaseModel):
     start_date: str
     end_date: str
 
 
-def _load_history_cache(db, stock_codes, history_start, sync_start):
-    """仅预加载待同步股票的历史 close（指标计算上下文）。"""
+def _load_sync_context(db, stock_codes, context_start, fetch_start, fetch_end):
+    """一次性加载同步所需的三份上下文，避免在拉取阶段回查数据库。
+
+    返回 {code: {"history": [...], "overlap": {date: close}, "earliest": date}}
+      - history：fetch_start 之前的 close，作为指标计算上下文
+      - overlap：fetch_start~fetch_end 内库中已有的 close，用于复权漂移检测
+      - earliest：该股票在库中的最早交易日，全量重拉时作为起点
+    """
     from app.models.stock_kline import StockKline
+    from sqlalchemy import func
 
     if not stock_codes:
         return {}
 
-    history_klines = db.query(StockKline).filter(
+    context = {
+        code: {"history": [], "overlap": {}, "earliest": None}
+        for code in stock_codes
+    }
+
+    rows = db.query(
+        StockKline.stock_code, StockKline.trade_date, StockKline.close
+    ).filter(
         StockKline.stock_code.in_(stock_codes),
-        StockKline.trade_date >= history_start,
-        StockKline.trade_date < sync_start,
+        StockKline.trade_date >= context_start,
+        StockKline.trade_date <= fetch_end,
     ).order_by(StockKline.stock_code.asc(), StockKline.trade_date.asc()).all()
 
-    cache = {}
-    for k in history_klines:
-        if k.stock_code not in cache:
-            cache[k.stock_code] = []
-        cache[k.stock_code].append({'trade_date': k.trade_date, 'close': float(k.close)})
-    return cache
+    for code, trade_date, close in rows:
+        entry = context.get(code)
+        if entry is None or close is None:
+            continue
+        if trade_date < fetch_start:
+            entry["history"].append({'trade_date': trade_date, 'close': float(close)})
+        else:
+            entry["overlap"][trade_date] = float(close)
+
+    earliest_rows = db.query(
+        StockKline.stock_code, func.min(StockKline.trade_date)
+    ).filter(
+        StockKline.stock_code.in_(stock_codes)
+    ).group_by(StockKline.stock_code).all()
+
+    for code, earliest in earliest_rows:
+        if code in context:
+            context[code]["earliest"] = earliest
+
+    return context
 
 
-def _process_single_stock(stock, start_date, end_date, skipped_codes, history_cache, skip_check=True):
+def _process_single_stock(stock, start_date, end_date, skipped_codes, sync_context, skip_check=True):
     stock_code = stock.code
     stock_name = stock.name
     result = {
@@ -55,6 +90,7 @@ def _process_single_stock(stock, start_date, end_date, skipped_codes, history_ca
         "status": "pending",
         "reason": None,
         "kline_data": None,
+        "full_resync": False,
     }
 
     try:
@@ -65,10 +101,26 @@ def _process_single_stock(stock, start_date, end_date, skipped_codes, history_ca
                 result["reason"] = "在跳过列表中"
                 return result
 
-        stock_history = history_cache.get(stock_code, [])
+        ctx = sync_context.get(stock_code) or {"history": [], "overlap": {}, "earliest": None}
         kline_data = sync_service.fetch_one_stock_history(
-            stock_code, start_date, end_date, stock_history
+            stock_code, start_date, end_date, ctx["history"]
         )
+
+        if len(kline_data) == 0:
+            result["status"] = "no_data"
+            result["reason"] = "no data available"
+            return result
+
+        resync_reason = _need_full_resync(kline_data, ctx, start_date)
+        if resync_reason:
+            # 复权因子已变，库中全部历史价格失效，从最早一条重新拉取覆盖
+            full_start = ctx["earliest"].strftime("%Y%m%d")
+            print(f"[QFQ] {stock_code} {stock_name} 全量重拉（{full_start} 起）：{resync_reason}", flush=True)
+            kline_data = sync_service.fetch_one_stock_history(
+                stock_code, full_start, end_date, None
+            )
+            result["full_resync"] = True
+            result["reason"] = resync_reason
 
         if len(kline_data) > 0:
             result["status"] = "success"
@@ -84,6 +136,34 @@ def _process_single_stock(stock, start_date, end_date, skipped_codes, history_ca
         traceback.print_exc()
 
     return result
+
+
+def _need_full_resync(kline_data, ctx, fetch_start: str):
+    """判断该股票是否需要全量重拉，返回原因；不需要则返回 None。
+
+    主判据是**前复权价格漂移**：除权除息后腾讯会用新因子重算全部历史，
+    重叠日期的收盘价随之变化。这个判据同时保证了幂等——重拉之后价格一致，
+    下次同步不会重复触发。
+    """
+    earliest = ctx.get("earliest")
+    if not earliest:
+        # 库中本来就没有该股票的历史数据，没有需要修正的对象
+        return None
+
+    fetch_start_date = datetime.strptime(fetch_start.replace('-', ''), "%Y%m%d").date()
+    if earliest >= fetch_start_date:
+        # 已有数据都在本次拉取范围内，会被直接覆盖，无需额外处理
+        return None
+
+    drift = sync_service.detect_qfq_drift(kline_data, ctx.get("overlap") or {})
+    if drift:
+        return f"前复权价格变化（{drift}）"
+
+    # 无重叠日可比对时无法判断，若区间内确实出现除权除息则保守重拉
+    if not ctx.get("overlap") and sync_service.has_dividend_event(kline_data):
+        return "区间内出现除权除息且无重叠日可比对"
+
+    return None
 
 
 def _run_save_worker(save_queue: queue.Queue, batch_save_size: int):
@@ -125,9 +205,10 @@ def _flush_save_batch(batch):
     )
 
 
-def run_sync_task(start_date: str, end_date: str, skip_check: bool = True, history_cache: dict = None):
+def run_sync_task(start_date: str, end_date: str, skip_check: bool = True):
     count = 0
     success_count = 0
+    resync_count = 0
     failed_stocks = []
     no_data_stocks = []
     skipped_count = 0
@@ -144,18 +225,19 @@ def run_sync_task(start_date: str, end_date: str, skip_check: bool = True, histo
     try:
         begin_sync()
 
-        start_date_clean = start_date.replace('-', '')
+        requested_start = start_date.replace('-', '')
         end_date_clean = end_date.replace('-', '')
-        original_start = start_date_clean
 
-        sync_start_obj = datetime.strptime(start_date_clean, "%Y%m%d").date()
-        extended_start_obj = sync_start_obj - timedelta(days=365)
-        start_date_clean = extended_start_obj.strftime("%Y%m%d")
+        # 仅向前扩展少量缓冲日，用于覆盖节假日并与库中数据形成重叠（复权漂移检测所需）。
+        # 真正需要重拉历史的股票由 _need_full_resync 单独识别，不再无差别前推一年。
+        requested_start_obj = datetime.strptime(requested_start, "%Y%m%d").date()
+        fetch_start_obj = requested_start_obj - timedelta(days=SYNC_BUFFER_DAYS)
+        start_date_clean = fetch_start_obj.strftime("%Y%m%d")
 
         print("=" * 50)
         print("[START] Starting sync task")
-        print(f"[INFO] Requested range: {original_start} to {end_date_clean}")
-        print(f"[INFO] Extended range (for QFQ accuracy): {start_date_clean} to {end_date_clean}")
+        print(f"[INFO] Requested range: {requested_start} to {end_date_clean}")
+        print(f"[INFO] Fetch range (+{SYNC_BUFFER_DAYS}d buffer): {start_date_clean} to {end_date_clean}")
         print(f"[INFO] Fetch workers: {FETCH_WORKERS}, rate limit: {sync_service.KLINE_API_RATE_PER_SECOND}/s")
         print(f"[INFO] Save queue max: {SAVE_QUEUE_MAXSIZE}, batch size: {BATCH_SAVE_SIZE}")
         print(f"[INFO] Skip check: {'enabled' if skip_check else 'disabled'}")
@@ -189,24 +271,24 @@ def run_sync_task(start_date: str, end_date: str, skip_check: bool = True, histo
         skipped_codes = load_skipped_codes()
         print(f"[INFO] Loaded {len(skipped_codes)} stocks from skip list")
 
-        print("\n[STEP 1.5/3] Pre-loading historical data for indicator calculation...")
-        sync_start_date_obj = datetime.strptime(start_date_clean, "%Y%m%d").date()
-        history_start_date_obj = sync_start_date_obj - timedelta(days=120)
+        print("\n[STEP 1.5/3] Pre-loading indicator context and QFQ baseline...")
+        context_start_obj = fetch_start_obj - timedelta(days=INDICATOR_CONTEXT_DAYS)
+        fetch_end_obj = datetime.strptime(end_date_clean, "%Y%m%d").date()
         filtered_codes = [s.code for s in filtered_stocks]
 
         with SessionLocal() as db_cache:
-            local_history_cache = _load_history_cache(
-                db_cache, filtered_codes, history_start_date_obj, sync_start_date_obj
+            sync_context = _load_sync_context(
+                db_cache, filtered_codes, context_start_obj, fetch_start_obj, fetch_end_obj
             )
 
-        print(f"[INFO] Pre-loaded history for {len(local_history_cache)} stocks", flush=True)
+        print(f"[INFO] Pre-loaded context for {len(sync_context)} stocks", flush=True)
 
         print("\n[STEP 2/3] Syncing K-line data (pipeline: fetch + async save)...", flush=True)
         saver_thread.start()
 
         def fetch_and_enqueue(stock):
             result = _process_single_stock(
-                stock, start_date_clean, end_date_clean, skipped_codes, local_history_cache, skip_check
+                stock, start_date_clean, end_date_clean, skipped_codes, sync_context, skip_check
             )
             if result["status"] == "success":
                 # 队列满时阻塞，自然降低 API 请求速率
@@ -238,9 +320,12 @@ def run_sync_task(start_date: str, end_date: str, skip_check: bool = True, histo
 
                         if result["status"] == "success":
                             success_count += 1
+                            if result.get("full_resync"):
+                                resync_count += 1
+                            tag = " [FULL-RESYNC]" if result.get("full_resync") else ""
                             print(
                                 f"[OK] [{count}/{total}] {stock_code} {stock_name} "
-                                f"fetched {len(result['kline_data'])} records"
+                                f"fetched {len(result['kline_data'])} records{tag}"
                             )
                         elif result["status"] == "skipped":
                             skipped_count += 1
@@ -276,6 +361,7 @@ def run_sync_task(start_date: str, end_date: str, skip_check: bool = True, histo
         print("[DONE] Sync completed!")
         print(f"  Total: {total}")
         print(f"  Success: {success_count}")
+        print(f"  Full resync (除权除息): {resync_count}")
         print(f"  Skipped: {skipped_count}")
         print(f"  Failed: {len(failed_stocks)}")
         print(f"  No data: {len(no_data_stocks)}")

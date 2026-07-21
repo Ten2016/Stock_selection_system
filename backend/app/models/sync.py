@@ -1,6 +1,5 @@
-from sqlalchemy import Column, Integer, String, Date, TIMESTAMP, JSON, ForeignKey
+from sqlalchemy import Column, Integer, String, Date, TIMESTAMP, JSON
 from sqlalchemy.sql import func
-from sqlalchemy.orm import relationship
 
 from app.utils.database import Base
 
@@ -22,17 +21,3 @@ class SyncRecord(Base):
     failed_stocks = Column(JSON)
     no_data_stocks = Column(JSON)
     created_at = Column(TIMESTAMP, server_default=func.now())
-
-
-class SelectionResult(Base):
-    __tablename__ = "selection_result"
-
-    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    strategy_id = Column(Integer, ForeignKey("strategy.id"), nullable=False)
-    stock_code = Column(String(10), nullable=False, index=True)
-    signal_date = Column(Date, nullable=False)
-    signal_type = Column(String(50), nullable=False)
-    signal_detail = Column(JSON)
-    created_at = Column(TIMESTAMP, server_default=func.now())
-
-    strategy = relationship("Strategy")

@@ -1,1022 +1,669 @@
 <template>
   <el-dialog
     :model-value="visible"
+    :title="`${stockCode} ${stockName}`"
+    width="92%"
+    top="4vh"
+    destroy-on-close
     @update:model-value="$emit('update:visible', $event)"
-    :title="stockCode + ' - ' + stockName + ' K线图'"
-    width="80%"
-    :close-on-click-modal="false"
-    @close="handleClose"
+    @opened="onDialogOpened"
+    @closed="handleClosed"
   >
-    <div style="display: flex;">
-      <div style="flex: 1; margin-right: 10px;">
-        <el-card style="margin-bottom: 10px;">
-          <div ref="chartRef" style="height: 600px; width: 100%;"></div>
-        </el-card>
-        <!-- 股票基本信息 -->
-        <el-card v-if="stockBasicInfo">
-          <template #header>
-            <span style="font-weight: bold;">{{ stockCode }} {{ stockName }} 基本信息</span>
-          </template>
-          <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px;">
-            <div>
-              <div style="color: #909399; font-size: 12px; margin-bottom: 4px;">总市值</div>
-              <div style="font-size: 16px; font-weight: bold;">{{ stockBasicInfo.total_cap ? stockBasicInfo.total_cap.toFixed(2) + ' 亿' : '-' }}</div>
-            </div>
-            <div>
-              <div style="color: #909399; font-size: 12px; margin-bottom: 4px;">动态市盈率 (TTM)</div>
-              <div style="font-size: 16px; font-weight: bold;">{{ stockBasicInfo.pe_ratio ? stockBasicInfo.pe_ratio.toFixed(2) : '-' }}</div>
-            </div>
-            <div>
-              <div style="color: #909399; font-size: 12px; margin-bottom: 4px;">静态市盈率</div>
-              <div style="font-size: 16px; font-weight: bold;">{{ stockBasicInfo.pe_ratio_static ? stockBasicInfo.pe_ratio_static.toFixed(2) : '-' }}</div>
-            </div>
-            <div>
-              <div style="color: #909399; font-size: 12px; margin-bottom: 4px;">市净率</div>
-              <div style="font-size: 16px; font-weight: bold;">{{ stockBasicInfo.pb_ratio ? stockBasicInfo.pb_ratio.toFixed(2) : '-' }}</div>
-            </div>
-            <div>
-              <div style="color: #909399; font-size: 12px; margin-bottom: 4px;">今年涨跌幅</div>
-              <div v-if="stockBasicInfo.ytd_change_pct != null" :style="{fontSize: '16px', fontWeight: 'bold', color: stockBasicInfo.ytd_change_pct >= 0 ? '#ef5350' : '#26a69a'}">
-                {{ stockBasicInfo.ytd_change_pct.toFixed(2) }}%
-              </div>
-              <div v-else style="font-size: 16px; font-weight: bold;">-</div>
-            </div>
-            <div>
-              <div style="color: #909399; font-size: 12px; margin-bottom: 4px;">行业</div>
-              <div style="font-size: 16px; font-weight: bold;">{{ stockBasicInfo.industry || '-' }}</div>
-            </div>
-          </div>
-        </el-card>
-      </div>
-      <el-card style="width: 280px;">
-        <div style="padding: 10px;">
-          <div v-if="strategyResult" style="margin-bottom: 15px; padding: 10px; background: #e6f7ff; border: 1px solid #91d5ff; border-radius: 4px;">
-            <h4 style="margin: 0 0 8px 0; font-size: 14px; color: #1890ff;">
-              🎯 {{ strategyResult.strategy }}
-            </h4>
-            <!-- consecutive_ma5 策略信息 -->
-            <div v-if="strategyResult.breakdown_date" style="margin-bottom: 8px;">
-              <el-tag size="small" type="warning">
-                跌破：{{ strategyResult.breakdown_date }}
-              </el-tag>
-            </div>
-            <div v-if="strategyResult.matching_dates && strategyResult.matching_dates.length >= 2" style="margin-bottom: 8px;">
-              <el-tag size="small" type="success" style="margin-right: 4px;">
-                {{ strategyResult.matching_dates[0] }}
-              </el-tag>
-              <el-tag size="small" type="success">
-                {{ strategyResult.matching_dates[1] }}
-              </el-tag>
-            </div>
-            <div v-if="strategyResult.details && strategyResult.breakdown_close" style="margin-top: 8px; font-size: 12px; color: #606266;">
-              <div>跌破日: 收{{ toFixed(strategyResult.breakdown_close) }} / 下轨{{ toFixed(strategyResult.boll_lower) }}</div>
-              <div style="margin-top: 4px;" v-if="strategyResult.details.day1_close">第一天: 收{{ toFixed(strategyResult.details.day1_close) }} / MA5{{ toFixed(strategyResult.details.day1_ma5) }}</div>
-              <div style="margin-top: 4px;" v-if="strategyResult.details.day2_close">第二天: 收{{ toFixed(strategyResult.details.day2_close) }} / MA5{{ toFixed(strategyResult.details.day2_ma5) }}</div>
-            </div>
-            
-            <!-- rise_then_fall 策略信息 -->
-            <div v-if="strategyResult.rise_date" style="margin-bottom: 8px;">
-              <el-tag size="small" type="danger">
-                大涨：{{ strategyResult.rise_date }} ({{ strategyResult.rise_pct }}%)
-              </el-tag>
-            </div>
-            <div v-if="strategyResult.falling_dates && strategyResult.falling_dates.length > 0" style="margin-bottom: 8px;">
-              <el-tag size="small" type="info" style="margin-right: 4px;" v-for="(date, idx) in strategyResult.falling_dates" :key="idx">
-                {{ date }}
-              </el-tag>
-            </div>
-            <div v-if="strategyResult.details && strategyResult.rise_close" style="margin-top: 8px; font-size: 12px; color: #606266;">
-              <div>大涨日: 收{{ toFixed(strategyResult.rise_close) }}</div>
-              <div style="margin-top: 4px;" v-for="(date, idx) in strategyResult.falling_dates" :key="idx">
-                跌{{ idx + 1 }}: 收{{ toFixed(strategyResult.details['fall_day' + (idx + 1) + '_close']) }}
-              </div>
-            </div>
-          </div>
-          <h4 style="margin: 0 0 15px 0; font-size: 16px;">{{ currentDate }}</h4>
-          <div v-if="currentData">
-            <div style="margin-bottom: 8px;">
-              <span style="color:#ef5350;">●</span> 开盘: {{ toFixed(currentData.open) }}
-            </div>
-            <div style="margin-bottom: 8px;">
-              <span style="color:#ef5350;">●</span> 收盘: {{ toFixed(currentData.close) }}
-            </div>
-            <div style="margin-bottom: 8px;">
-              <span :style="{color: (currentData.change_pct != null ? currentData.change_pct : 0) >= 0 ? '#ef5350' : '#26a69a'}">●</span> 涨跌幅: {{ toFixed(currentData.change_pct != null ? currentData.change_pct : 0) }}%
-            </div>
-            <div style="margin-bottom: 8px;">
-              <span style="color:#ef5350;">●</span> 最高: {{ toFixed(currentData.high) }}
-            </div>
-            <div style="margin-bottom: 8px;">
-              <span style="color:#ef5350;">●</span> 最低: {{ toFixed(currentData.low) }}
-            </div>
-            <div style="margin-top: 12px; padding-top: 8px; border-top: 1px solid #eee;"></div>
-            <div v-if="currentData.ma5 != null" style="margin-bottom: 8px;">
-              <span style="color:#000;">●</span> MA5: {{ toFixed(currentData.ma5) }}
-            </div>
-            <div v-if="currentData.ma10 != null" style="margin-bottom: 8px;">
-              <span style="color:#91cc75;">●</span> MA10: {{ toFixed(currentData.ma10) }}
-            </div>
-            <div v-if="currentData.ma30 != null" style="margin-bottom: 8px;">
-              <span style="color:#ee6666;">●</span> MA30: {{ toFixed(currentData.ma30) }}
-            </div>
-            <div v-if="currentData.ma60 != null" style="margin-bottom: 8px;">
-              <span style="color:#ff6b6b;">●</span> MA60: {{ toFixed(currentData.ma60) }}
-            </div>
-            <div style="margin-top: 12px; padding-top: 8px; border-top: 1px solid #eee;"></div>
-            <div v-if="currentData.boll_upper != null" style="margin-bottom: 8px;">
-              <span style="color:#fc8452;">●</span> 布林上轨: {{ toFixed(currentData.boll_upper) }}
-            </div>
-            <div v-if="currentData.boll_mid != null" style="margin-bottom: 8px;">
-              <span style="color:#9a60b4;">●</span> 布林中轨: {{ toFixed(currentData.boll_mid) }}
-            </div>
-            <div v-if="currentData.boll_lower != null" style="margin-bottom: 8px;">
-              <span style="color:#ea7ccc;">●</span> 布林下轨: {{ toFixed(currentData.boll_lower) }}
-            </div>
-            <div style="margin-top: 12px; padding-top: 8px; border-top: 1px solid #eee;"></div>
-            <div style="margin-bottom: 8px; font-weight: bold; font-size: 13px;">MACD (12,26,9)</div>
-            <div v-if="currentData.dif != null" style="margin-bottom: 8px;">
-              <span style="color:#1890ff;">●</span> DIF: {{ toFixed(currentData.dif, 4) }}
-            </div>
-            <div v-if="currentData.dea != null" style="margin-bottom: 8px;">
-              <span style="color:#fa8c16;">●</span> DEA: {{ toFixed(currentData.dea, 4) }}
-            </div>
-            <div v-if="currentData.macd != null" style="margin-bottom: 8px;">
-              <span :style="{color: currentData.macd >= 0 ? '#ef5350' : '#26a69a'}">●</span>
-              MACD: {{ toFixed(currentData.macd, 4) }}
-            </div>
-          </div>
+    <div v-loading="loading" class="kline-body">
+      <!-- 基本信息 -->
+      <div v-if="stockBasicInfo" class="basic-info">
+        <div v-for="item in basicInfoItems" :key="item.label" class="basic-info__cell">
+          <span class="basic-info__label">{{ item.label }}</span>
+          <span class="basic-info__value" :class="item.tone">{{ item.value }}</span>
         </div>
-      </el-card>
+      </div>
+
+      <!-- 指标开关 -->
+      <div class="toolbar">
+        <el-checkbox-group v-model="visibleOverlays" size="small">
+          <el-checkbox-button v-for="ma in MA_LINES" :key="ma.key" :value="ma.key">
+            <span :style="{ color: ma.color }">●</span> {{ ma.label }}
+          </el-checkbox-button>
+          <el-checkbox-button value="boll">
+            <span :style="{ color: BOLL_COLOR }">●</span> BOLL
+          </el-checkbox-button>
+        </el-checkbox-group>
+        <div class="toolbar__spacer" />
+        <el-radio-group v-model="rangeDays" size="small">
+          <el-radio-button v-for="r in RANGE_PRESETS" :key="r.value" :value="r.value">
+            {{ r.label }}
+          </el-radio-button>
+        </el-radio-group>
+      </div>
+
+      <!-- 图表 + 悬浮读数 -->
+      <div class="chart-wrap">
+        <div class="legend">
+          <span class="legend__date">{{ legend.date }}</span>
+          <span :class="legend.tone">开 {{ legend.open }}</span>
+          <span :class="legend.tone">高 {{ legend.high }}</span>
+          <span :class="legend.tone">低 {{ legend.low }}</span>
+          <span :class="legend.tone">收 {{ legend.close }}</span>
+          <span :class="legend.tone">{{ legend.changePct }}</span>
+          <template v-for="ma in MA_LINES" :key="ma.key">
+            <span v-if="visibleOverlays.includes(ma.key)" :style="{ color: ma.color }">
+              {{ ma.label }} {{ legend[ma.key] }}
+            </span>
+          </template>
+        </div>
+        <div class="legend legend--macd">
+          <span class="legend__title">MACD(12,26,9)</span>
+          <span :style="{ color: DIF_COLOR }">DIF {{ legend.dif }}</span>
+          <span :style="{ color: DEA_COLOR }">DEA {{ legend.dea }}</span>
+          <span :class="legend.macdTone">MACD {{ legend.macd }}</span>
+        </div>
+        <div ref="chartRef" class="chart" />
+        <el-empty v-if="!loading && !hasData" description="暂无 K 线数据" class="chart-empty" />
+      </div>
+
+      <!-- 策略命中详情 -->
+      <div v-if="strategyResult" class="strategy-panel">
+        <div class="strategy-panel__title">策略命中</div>
+        <div class="strategy-panel__tags">
+          <el-tag
+            v-for="(t, i) in strategyTags"
+            :key="i"
+            :type="t.tone"
+            size="small"
+            effect="light"
+          >{{ t.text }}</el-tag>
+        </div>
+        <div class="strategy-panel__desc">{{ strategyResult.strategy }}</div>
+      </div>
+
+      <div v-if="backtestSignals.length" class="strategy-panel">
+        <div class="strategy-panel__title">回测买点（{{ backtestSignals.length }} 个）</div>
+        <div class="strategy-panel__tags">
+          <el-tag v-for="(s, i) in backtestSignals" :key="i" type="success" size="small" effect="plain">
+            #{{ i + 1 }} {{ s.date }}
+          </el-tag>
+        </div>
+      </div>
     </div>
   </el-dialog>
 </template>
 
 <script setup>
-import { ref, watch, nextTick, onUnmounted } from 'vue'
-import * as echarts from 'echarts'
+import { ref, reactive, computed, watch, nextTick, onUnmounted } from 'vue'
+import {
+  createChart,
+  CandlestickSeries,
+  LineSeries,
+  HistogramSeries,
+  createSeriesMarkers,
+  CrosshairMode,
+  LineStyle,
+  ColorType,
+} from 'lightweight-charts'
 import api from '../api'
 
 const props = defineProps({
-  visible: {
-    type: Boolean,
-    default: false
-  },
-  stockCode: {
-    type: String,
-    default: ''
-  },
-  strategyResult: {
-    type: Object,
-    default: null
-  },
-  backtestSignals: {
-    type: Array,
-    default: () => []
-  }
+  visible: { type: Boolean, default: false },
+  stockCode: { type: String, default: '' },
+  strategyResult: { type: Object, default: null },
+  backtestSignals: { type: Array, default: () => [] },
 })
 
-const emit = defineEmits(['update:visible'])
+defineEmits(['update:visible'])
+
+// A 股惯例：红涨绿跌
+const UP_COLOR = '#ef5350'
+const DOWN_COLOR = '#26a69a'
+const BOLL_COLOR = '#b37feb'
+const DIF_COLOR = '#f5a623'
+const DEA_COLOR = '#4a90e2'
+
+const MA_LINES = [
+  { key: 'ma5', label: 'MA5', color: '#f5a623' },
+  { key: 'ma10', label: 'MA10', color: '#4a90e2' },
+  { key: 'ma20', label: 'MA20', color: '#9c27b0' },
+  { key: 'ma30', label: 'MA30', color: '#00bcd4' },
+  { key: 'ma60', label: 'MA60', color: '#ff7043' },
+]
+
+const RANGE_PRESETS = [
+  { label: '3月', value: 60 },
+  { label: '6月', value: 120 },
+  { label: '1年', value: 250 },
+  { label: '全部', value: 0 },
+]
+
+const MACD_PANE = 1
+const MACD_PANE_HEIGHT = 130
+// 拉取窗口：覆盖最长预设(1年≈250交易日)并留出均线预热余量
+const FETCH_DAYS = 600
 
 const chartRef = ref(null)
 const stockName = ref('')
 const stockBasicInfo = ref(null)
-const currentDate = ref('')
-const currentData = ref(null)
+const loading = ref(false)
+const hasData = ref(false)
+const visibleOverlays = ref(['ma5', 'ma10', 'ma20', 'ma60'])
+const rangeDays = ref(120)
+
+const emptyLegend = () => ({
+  date: '-', open: '-', high: '-', low: '-', close: '-', changePct: '-',
+  ma5: '-', ma10: '-', ma20: '-', ma30: '-', ma60: '-',
+  dif: '-', dea: '-', macd: '-',
+  tone: 'flat', macdTone: 'flat',
+})
+const legend = reactive(emptyLegend())
+
+// 图表实例一律用普通变量：Vue 的响应式 Proxy 会破坏库内部的实例判等，
+// 导致 param.seriesData.get(series) 永远取不到值。
 let chart = null
+let candleSeries = null
+let maSeries = {}
+let bollSeries = {}
+let macdHist = null
+let difSeries = null
+let deaSeries = null
+let markersPlugin = null
+let resizeObserver = null
 let allData = []
 
 const toFixed = (num, digits = 2) => {
   if (num == null) return '-'
   const n = Number(num)
-  if (isNaN(n)) return '-'
-  return n.toFixed(digits)
+  return Number.isNaN(n) ? '-' : n.toFixed(digits)
 }
 
-const calcTDSequential = (data) => {
-  const buySequences = []
-  const sellSequences = []
-  let buyCount = 0
-  let sellCount = 0
-  let currentBuySeq = []
-  let currentSellSeq = []
+const basicInfoItems = computed(() => {
+  const info = stockBasicInfo.value || {}
+  const ytd = info.ytd_change_pct
+  return [
+    { label: '总市值', value: info.total_cap != null ? `${toFixed(info.total_cap)} 亿` : '-' },
+    { label: '动态市盈率', value: toFixed(info.pe_ratio) },
+    { label: '静态市盈率', value: toFixed(info.pe_ratio_static) },
+    { label: '市净率', value: toFixed(info.pb_ratio) },
+    {
+      label: '今年涨跌幅',
+      value: ytd != null ? `${toFixed(ytd)}%` : '-',
+      tone: ytd == null ? '' : ytd >= 0 ? 'up' : 'down',
+    },
+    { label: '行业', value: info.industry || '-' },
+  ]
+})
 
-  for (let i = 4; i < data.length; i++) {
-    const curr = data[i]
-    const prev4 = data[i - 4]
+const strategyTags = computed(() => {
+  const result = props.strategyResult
+  if (!result) return []
+  // 后端策略统一返回 tags；兼容旧结果则退回按字段拼装
+  if (Array.isArray(result.tags)) return result.tags
+  const fallback = []
+  if (result.breakdown_date) fallback.push({ text: `跌破 ${result.breakdown_date}`, tone: 'warning' })
+  if (result.rise_date) fallback.push({ text: `大涨 ${result.rise_date}`, tone: 'danger' })
+  if (result.valley_date) fallback.push({ text: `拐点 ${result.valley_date}`, tone: 'success' })
+  return fallback
+})
 
-    if (curr.close > prev4.close) {
-      if (buyCount > 0) {
-        buySequences.push(currentBuySeq)
-        currentBuySeq = []
-        buyCount = 0
-      }
-      sellCount++
-      currentSellSeq.push({
-        coord: [data[i].trade_date, data[i].high],
-        value: sellCount,
-        dataIndex: i
-      })
-    } else if (curr.close < prev4.close) {
-      if (sellCount > 0) {
-        sellSequences.push(currentSellSeq)
-        currentSellSeq = []
-        sellCount = 0
-      }
-      buyCount++
-      currentBuySeq.push({
-        coord: [data[i].trade_date, data[i].low],
-        value: buyCount,
-        dataIndex: i
-      })
-    } else {
-      if (buyCount > 0) {
-        buySequences.push(currentBuySeq)
-        currentBuySeq = []
-        buyCount = 0
-      }
-      if (sellCount > 0) {
-        sellSequences.push(currentSellSeq)
-        currentSellSeq = []
-        sellCount = 0
-      }
-    }
+// ---------- 主题 ----------
+const chartTheme = () => ({
+  layout: {
+    background: { type: ColorType.Solid, color: '#ffffff' },
+    textColor: '#5c6270',
+    fontSize: 12,
+    attributionLogo: false,
+    panes: { separatorColor: '#e8ebf2', separatorHoverColor: 'rgba(64,158,255,0.25)', enableResize: true },
+  },
+  grid: {
+    vertLines: { color: '#f4f6fa' },
+    horzLines: { color: '#f4f6fa' },
+  },
+  rightPriceScale: {
+    borderColor: '#e8ebf2',
+    scaleMargins: { top: 0.12, bottom: 0.08 },
+  },
+  timeScale: {
+    borderColor: '#e8ebf2',
+    rightOffset: 6,
+    barSpacing: 8,
+    minBarSpacing: 1,
+  },
+  crosshair: {
+    mode: CrosshairMode.Normal,
+    vertLine: { color: '#9aa0ac', width: 1, style: LineStyle.Dashed, labelBackgroundColor: '#5c6270' },
+    horzLine: { color: '#9aa0ac', width: 1, style: LineStyle.Dashed, labelBackgroundColor: '#5c6270' },
+  },
+})
 
-    if (sellCount >= 9) {
-      sellSequences.push(currentSellSeq)
-      currentSellSeq = []
-      sellCount = 0
-    }
-    if (buyCount >= 9) {
-      buySequences.push(currentBuySeq)
-      currentBuySeq = []
-      buyCount = 0
-    }
+// 日线的 time 直接用后端的 'YYYY-MM-DD'，避开时区换算
+const formatDate = (t) => {
+  if (typeof t === 'string') return t
+  if (t && typeof t === 'object' && 'year' in t) {
+    return `${t.year}-${String(t.month).padStart(2, '0')}-${String(t.day).padStart(2, '0')}`
   }
-
-  if (currentBuySeq.length > 0) {
-    buySequences.push(currentBuySeq)
-  }
-  if (currentSellSeq.length > 0) {
-    sellSequences.push(currentSellSeq)
-  }
-
-  const tdBuy = []
-  const tdSell = []
-
-  buySequences.forEach((seq, idx) => {
-    const isLast = idx === buySequences.length - 1
-    if (isLast || seq.length >= 8) {
-      tdBuy.push(...seq)
-    }
-  })
-
-  sellSequences.forEach((seq, idx) => {
-    const isLast = idx === sellSequences.length - 1
-    if (isLast || seq.length >= 8) {
-      tdSell.push(...seq)
-    }
-  })
-
-  return { tdBuy, tdSell }
+  return String(t ?? '-')
 }
 
-const renderChart = (data) => {
-  if (chart) {
-    chart.dispose()
-    chart = null
-  }
+// 指标为 null 时给 whitespace（只有 time），让线断开而不是错误连线
+const lineData = (rows, key) =>
+  rows.map(d => (d[key] == null ? { time: d.trade_date } : { time: d.trade_date, value: d[key] }))
 
+// ---------- 构建图表 ----------
+const buildChart = () => {
   if (!chartRef.value) return
 
-  const dates = data.map(item => item.trade_date)
-  const values = data.map(item => [
-    item.open, item.close, item.low, item.high
-  ])
-  const ma5 = data.map(item => item.ma5)
-  const ma10 = data.map(item => item.ma10)
-  const ma20 = data.map(item => item.ma20)
-  const ma30 = data.map(item => item.ma30)
-  const ma60 = data.map(item => item.ma60)
-  const bollUpper = data.map(item => item.boll_upper)
-  const bollMid = data.map(item => item.boll_mid)
-  const bollLower = data.map(item => item.boll_lower)
-  const difData = data.map(item => item.dif)
-  const deaData = data.map(item => item.dea)
-  const macdData = data.map(item => item.macd)
+  chart = createChart(chartRef.value, { autoSize: true, ...chartTheme() })
 
-  const { tdBuy, tdSell } = calcTDSequential(data)
-  
-  const strategyMarkPoints = []
-  if (props.strategyResult) {
-    if (props.strategyResult.breakdown_date) {
-      const item = data.find(d => d.trade_date === props.strategyResult.breakdown_date)
-      if (item) {
-        strategyMarkPoints.push({
-          coord: [props.strategyResult.breakdown_date, item.low],
-          name: '跌破布林下轨',
-          symbol: 'pin',
-          symbolSize: 20,
-          label: {
-            show: true,
-            formatter: '跌破',
-            position: 'inside',
-            fontSize: 10,
-            color: '#fff',
-            fontWeight: 'bold',
-          },
-          itemStyle: {
-            color: '#faad14',
-          }
-        })
-      }
-    }
-    
-    if (props.strategyResult.matching_dates && Array.isArray(props.strategyResult.matching_dates)) {
-      props.strategyResult.matching_dates.forEach((date, idx) => {
-        const item = data.find(d => d.trade_date === date)
-        if (item) {
-          strategyMarkPoints.push({
-            coord: [date, item.high],
-            name: '站上5日线',
-            symbol: 'pin',
-            symbolSize: 20,
-            label: {
-              show: true,
-              formatter: `${idx + 1}`,
-              position: 'inside',
-              fontSize: 10,
-              color: '#fff',
-              fontWeight: 'bold',
-            },
-            itemStyle: {
-              color: '#52c41a',
-            }
-          })
-        }
-      })
-    }
-    
-    if (props.strategyResult.rise_date) {
-      const item = data.find(d => d.trade_date === props.strategyResult.rise_date)
-      if (item) {
-        strategyMarkPoints.push({
-          coord: [props.strategyResult.rise_date, item.high],
-          name: '大涨',
-          symbol: 'pin',
-          symbolSize: 20,
-          label: {
-            show: true,
-            formatter: '涨',
-            position: 'inside',
-            fontSize: 10,
-            color: '#fff',
-            fontWeight: 'bold',
-          },
-          itemStyle: {
-            color: '#f5222d',
-          }
-        })
-      }
-    }
-    
-    if (props.strategyResult.falling_dates && Array.isArray(props.strategyResult.falling_dates)) {
-      props.strategyResult.falling_dates.forEach((date, idx) => {
-        const item = data.find(d => d.trade_date === date)
-        if (item) {
-          strategyMarkPoints.push({
-            coord: [date, item.low],
-            name: '下跌',
-            symbol: 'pin',
-            symbolSize: 20,
-            label: {
-              show: true,
-              formatter: `${idx + 1}`,
-              position: 'inside',
-              fontSize: 10,
-              color: '#fff',
-              fontWeight: 'bold',
-            },
-            itemStyle: {
-              color: '#26a69a',
-            }
-          })
-        }
-      })
-    }
-  }
+  candleSeries = chart.addSeries(CandlestickSeries, {
+    upColor: UP_COLOR,
+    downColor: DOWN_COLOR,
+    borderUpColor: UP_COLOR,
+    borderDownColor: DOWN_COLOR,
+    wickUpColor: UP_COLOR,
+    wickDownColor: DOWN_COLOR,
+    borderVisible: false,
+    priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
+  }, 0)
 
-  // 回测信号标记
-  if (props.backtestSignals && props.backtestSignals.length > 0) {
-    props.backtestSignals.forEach((signal, idx) => {
-      const item = data.find(d => d.trade_date === signal.date)
-      if (item) {
-        strategyMarkPoints.push({
-          coord: [signal.date, item.low],
-          name: '买点' + (idx + 1),
-          symbol: 'triangle',
-          symbolSize: 14,
-          symbolRotate: 180,
-          label: {
-            show: true,
-            formatter: '买',
-            position: 'bottom',
-            fontSize: 11,
-            color: '#eb2f96',
-            fontWeight: 'bold',
-          },
-          itemStyle: {
-            color: '#eb2f96',
-          }
-        })
-      }
-    })
-  }
-
-  chart = echarts.init(chartRef.value)
-
-  const defaultShowCount = 200
-  const totalBars = data.length
-  const dataZoomStart = totalBars > defaultShowCount ? ((totalBars - defaultShowCount) / totalBars) * 100 : 0
-
-  // 计算指定索引范围内的最高/最低点
-  const calcExtremeInRange = (startIdx, endIdx) => {
-    let maxPrice = -Infinity
-    let maxDate = ''
-    let minPrice = Infinity
-    let minDate = ''
-    for (let i = Math.max(0, startIdx); i <= Math.min(data.length - 1, endIdx); i++) {
-      const item = data[i]
-      if (item.high > maxPrice) {
-        maxPrice = item.high
-        maxDate = item.trade_date
-      }
-      if (item.low < minPrice) {
-        minPrice = item.low
-        minDate = item.trade_date
-      }
-    }
-    return { maxDate, maxPrice, minDate, minPrice }
-  }
-
-  // 初始显示范围的最高/最低点
-  const initialStart = Math.floor(dataZoomStart / 100 * totalBars)
-  const initialEnd = totalBars - 1
-  const { maxDate: initMaxDate, maxPrice: initMaxPrice, minDate: initMinDate, minPrice: initMinPrice } = calcExtremeInRange(initialStart, initialEnd)
-
-  const latestMacd = data.length > 0 ? data[data.length - 1] : null
-
-  const option = {
-    animation: true,
-    animationDuration: 300,
-    animationDurationUpdate: 300,
-    animationEasing: 'cubicOut',
-    animationEasingUpdate: 'cubicOut',
-    title: {
-      text: props.stockCode + ' ' + stockName.value + ' K线图',
-      left: 0,
-      top: 0,
-    },
-    tooltip: {
-      trigger: 'axis',
-      axisPointer: {
-        type: 'cross',
-        link: [{ xAxisIndex: 'all' }],
-        lineStyle: {
-          color: '#999',
-          width: 1,
-          type: 'dashed',
-        },
-        crossStyle: {
-          color: '#999',
-          width: 1,
-          type: 'dashed',
-        }
-      },
-      show: true,
-      showContent: false,
-    },
-    legend: {
-      data: ['K线', 'MA5', 'MA10', 'MA30', 'MA60', '布林上轨', '布林中轨', '布林下轨', 'DIF', 'DEA', 'MACD'],
-      top: 25,
-    },
-    axisPointer: {
-      link: [{ xAxisIndex: 'all' }],
-      lineStyle: {
-        color: '#999',
-        width: 1,
-        type: 'dashed',
-      },
-      crossStyle: {
-        color: '#999',
-        width: 1,
-        type: 'dashed',
-      }
-    },
-    grid: [
-      {
-        left: '80',
-        right: '60',
-        top: '70',
-        height: '55%',
-        containLabel: true,
-      },
-      {
-        left: '80',
-        right: '60',
-        top: '72%',
-        height: '18%',
-        containLabel: true,
-      }
-    ],
-    xAxis: [
-      {
-        type: 'category',
-        data: dates,
-        boundaryGap: false,
-        axisLine: { onZero: false },
-        splitLine: { show: false },
-        min: 'dataMin',
-        max: 'dataMax',
-        gridIndex: 0,
-        axisLabel: { show: false },
-      },
-      {
-        type: 'category',
-        data: dates,
-        boundaryGap: false,
-        axisLine: { onZero: false },
-        splitLine: { show: false },
-        min: 'dataMin',
-        max: 'dataMax',
-        gridIndex: 1,
-        axisLabel: { show: true, fontSize: 10 },
-      }
-    ],
-    yAxis: [
-      {
-        scale: true,
-        gridIndex: 0,
-        splitArea: {
-          show: true,
-        },
-      },
-      {
-        scale: true,
-        gridIndex: 1,
-        splitArea: {
-          show: false,
-        },
-        axisLabel: { fontSize: 10 },
-      }
-    ],
-
-    dataZoom: [
-      {
-        type: 'inside',
-        xAxisIndex: [0, 1],
-        start: dataZoomStart,
-        end: 100,
-      },
-      {
-        type: 'slider',
-        xAxisIndex: [0, 1],
-        show: false,
-      },
-    ],
-
-    series: [
-      {
-        name: 'K线',
-        type: 'candlestick',
-        xAxisIndex: 0,
-        yAxisIndex: 0,
-        data: values,
-        itemStyle: {
-          color: '#ef5350',
-          color0: '#26a69a',
-          borderColor: '#ef5350',
-          borderColor0: '#26a69a',
-        },
-        markPoint: {
-          data: [
-            {
-              coord: [initMaxDate, initMaxPrice],
-              name: '最高价',
-              value: initMaxPrice,
-              label: {
-                formatter: '最高\n{c}',
-                fontSize: 10,
-              },
-              itemStyle: {
-                color: '#ef5350',
-              }
-            },
-            {
-              coord: [initMinDate, initMinPrice],
-              name: '最低价',
-              value: initMinPrice,
-              label: {
-                formatter: '最低\n{c}',
-                fontSize: 10,
-              },
-              itemStyle: {
-                color: '#26a69a',
-              }
-            },
-            ...strategyMarkPoints
-          ]
-        }
-      },
-      {
-        name: 'MA5',
-        type: 'line',
-        xAxisIndex: 0,
-        yAxisIndex: 0,
-        data: ma5,
-        smooth: true,
-        symbol: 'none',
-        lineStyle: {
-          width: 1,
-          color: '#000',
-          opacity: 0.8,
-        },
-      },
-      {
-        name: 'MA10',
-        type: 'line',
-        xAxisIndex: 0,
-        yAxisIndex: 0,
-        data: ma10,
-        smooth: true,
-        symbol: 'none',
-        lineStyle: {
-          width: 1,
-          opacity: 0.8,
-        },
-      },
-
-      {
-        name: 'MA30',
-        type: 'line',
-        xAxisIndex: 0,
-        yAxisIndex: 0,
-        data: ma30,
-        smooth: true,
-        symbol: 'none',
-        lineStyle: {
-          width: 1,
-          opacity: 0.8,
-        },
-      },
-      {
-        name: 'MA60',
-        type: 'line',
-        xAxisIndex: 0,
-        yAxisIndex: 0,
-        data: ma60,
-        smooth: true,
-        symbol: 'none',
-        lineStyle: {
-          width: 2,
-          color: '#ff6b6b',
-          opacity: 1,
-        },
-      },
-      {
-        name: '布林上轨',
-        type: 'line',
-        xAxisIndex: 0,
-        yAxisIndex: 0,
-        data: bollUpper,
-        smooth: true,
-        symbol: 'none',
-        lineStyle: {
-          width: 2,
-          type: 'dashed',
-          color: '#fc8452',
-          opacity: 0.9,
-        },
-      },
-      {
-        name: '布林中轨',
-        type: 'line',
-        xAxisIndex: 0,
-        yAxisIndex: 0,
-        data: bollMid,
-        smooth: true,
-        symbol: 'none',
-        lineStyle: {
-          width: 2,
-          type: 'dotted',
-          color: '#9a60b4',
-          opacity: 0.9,
-        },
-      },
-      {
-        name: '布林下轨',
-        type: 'line',
-        xAxisIndex: 0,
-        yAxisIndex: 0,
-        data: bollLower,
-        smooth: true,
-        symbol: 'none',
-        lineStyle: {
-          width: 2,
-          type: 'dashed',
-          color: '#ea7ccc',
-          opacity: 0.9,
-        },
-      },
-      {
-        name: 'TD买9',
-        type: 'scatter',
-        xAxisIndex: 0,
-        yAxisIndex: 0,
-        data: tdBuy.map(item => ({
-          value: [item.coord[0], item.coord[1]],
-          label: {
-            show: true,
-            formatter: item.value === 9 ? '低9' : item.value.toString(),
-            position: 'bottom',
-            fontSize: item.value === 9 ? 18 : 14,
-            color: item.value === 9 ? '#ff0000' : '#00b894',
-            fontWeight: item.value === 9 ? 'bold' : 'bold',
-            backgroundColor: item.value === 9 ? '#fff3cd' : 'transparent',
-            padding: item.value === 9 ? [3, 6] : 0,
-            borderRadius: item.value === 9 ? 4 : 0,
-          }
-        })),
-        symbol: 'circle',
-        symbolSize: 1,
-        itemStyle: {
-          color: 'transparent',
-        },
-      },
-      {
-        name: 'TD卖9',
-        type: 'scatter',
-        xAxisIndex: 0,
-        yAxisIndex: 0,
-        data: tdSell.map(item => ({
-          value: [item.coord[0], item.coord[1]],
-          label: {
-            show: true,
-            formatter: item.value === 9 ? '高9' : item.value.toString(),
-            position: 'top',
-            fontSize: item.value === 9 ? 18 : 14,
-            color: item.value === 9 ? '#ff0000' : '#e17055',
-            fontWeight: item.value === 9 ? 'bold' : 'bold',
-            backgroundColor: item.value === 9 ? '#fff3cd' : 'transparent',
-            padding: item.value === 9 ? [3, 6] : 0,
-            borderRadius: item.value === 9 ? 4 : 0,
-          }
-        })),
-        symbol: 'circle',
-        symbolSize: 1,
-        itemStyle: {
-          color: 'transparent',
-        },
-      },
-      {
-        name: 'DIF',
-        type: 'line',
-        xAxisIndex: 1,
-        yAxisIndex: 1,
-        data: difData,
-        smooth: true,
-        symbol: 'none',
-        lineStyle: {
-          width: 1.5,
-          color: '#1890ff',
-        },
-      },
-      {
-        name: 'DEA',
-        type: 'line',
-        xAxisIndex: 1,
-        yAxisIndex: 1,
-        data: deaData,
-        smooth: true,
-        symbol: 'none',
-        lineStyle: {
-          width: 1.5,
-          color: '#fa8c16',
-        },
-      },
-      {
-        name: 'MACD',
-        type: 'bar',
-        xAxisIndex: 1,
-        yAxisIndex: 1,
-        data: macdData.map((val, idx) => ({
-          value: val,
-          itemStyle: {
-            color: val != null && val >= 0 ? '#ef5350' : '#26a69a',
-          }
-        })),
-        barWidth: '25%',
-        markLine: {
-          silent: true,
-          symbol: 'none',
-          lineStyle: {
-            color: '#666',
-            width: 1,
-            type: 'solid',
-          },
-          data: [
-            { yAxis: 0 }
-          ]
-        }
-      },
-    ],
-    graphic: [
-      {
-        type: 'text',
-        left: 80,
-        top: '72%',
-        style: {
-          text: 'MACD(12,26,9)  ',
-          fontSize: 12,
-          fill: '#333',
-          fontWeight: 'bold',
-        },
-        z: 100,
-      },
-      {
-        type: 'text',
-        left: 80 + 85,
-        top: '72%',
-        style: {
-          text: latestMacd && latestMacd.macd != null ? `MACD:${latestMacd.macd.toFixed(4)}  ` : '',
-          fontSize: 12,
-          fill: latestMacd && latestMacd.macd != null && latestMacd.macd >= 0 ? '#ef5350' : '#26a69a',
-        },
-        z: 100,
-      },
-      {
-        type: 'text',
-        left: 80 + 175,
-        top: '72%',
-        style: {
-          text: latestMacd && latestMacd.dif != null ? `DIF:${latestMacd.dif.toFixed(4)}  ` : '',
-          fontSize: 12,
-          fill: '#1890ff',
-        },
-        z: 100,
-      },
-      {
-        type: 'text',
-        left: 80 + 250,
-        top: '72%',
-        style: {
-          text: latestMacd && latestMacd.dea != null ? `DEA:${latestMacd.dea.toFixed(4)}` : '',
-          fontSize: 12,
-          fill: '#fa8c16',
-        },
-        z: 100,
-      }
-    ]
-  }
-
-  chart.setOption(option, true)
-
-  if (data.length > 0) {
-    const latestData = data[data.length - 1]
-    currentDate.value = latestData.trade_date
-    currentData.value = latestData
-  }
-
-  // dataZoom时更新最高/最低点标记
-  chart.on('dataZoom', () => {
-    const opt = chart.getOption()
-    const start = opt.dataZoom[0].start
-    const end = opt.dataZoom[0].end
-    const startIdx = Math.floor(start / 100 * totalBars)
-    const endIdx = Math.floor(end / 100 * totalBars) - 1
-    const { maxDate, maxPrice, minDate, minPrice } = calcExtremeInRange(startIdx, endIdx)
-
-    chart.setOption({
-      series: [{
-        name: 'K线',
-        markPoint: {
-          data: [
-            { coord: [maxDate, maxPrice], value: maxPrice, name: '最高价', label: { formatter: '最高\n{c}', fontSize: 10 }, itemStyle: { color: '#ef5350' } },
-            { coord: [minDate, minPrice], value: minPrice, name: '最低价', label: { formatter: '最低\n{c}', fontSize: 10 }, itemStyle: { color: '#26a69a' } },
-            ...strategyMarkPoints
-          ]
-        }
-      }]
-    })
+  const overlayOpts = (color, extra = {}) => ({
+    color,
+    lineWidth: 1,
+    priceLineVisible: false,
+    lastValueVisible: false,
+    crosshairMarkerVisible: false,
+    ...extra,
   })
 
-  chart.getZr().on('mousemove', (event) => {
-    const pointInPixel = [event.offsetX, event.offsetY]
-    const pointInGrid = chart.convertFromPixel({ xAxisIndex: 0, yAxisIndex: 0 }, pointInPixel)
-    
-    if (pointInGrid && pointInGrid[0] != null) {
-      const idx = Math.round(pointInGrid[0])
-      if (idx >= 0 && idx < data.length) {
-        const d = data[idx]
-        currentDate.value = d.trade_date
-        currentData.value = d
+  for (const ma of MA_LINES) {
+    maSeries[ma.key] = chart.addSeries(LineSeries, overlayOpts(ma.color), 0)
+  }
+  for (const key of ['boll_upper', 'boll_mid', 'boll_lower']) {
+    bollSeries[key] = chart.addSeries(
+      LineSeries,
+      overlayOpts(BOLL_COLOR, { lineStyle: LineStyle.Dotted }),
+      0,
+    )
+  }
 
-        if (d.dif != null && d.dea != null && d.macd != null) {
-          chart.setOption({
-            graphic: [
-              {
-                left: 80,
-                top: '72%',
-                style: { text: 'MACD(12,26,9)  ' }
-              },
-              {
-                left: 80 + 85,
-                top: '72%',
-                style: { 
-                  text: `MACD:${d.macd.toFixed(4)}  `,
-                  fill: d.macd >= 0 ? '#ef5350' : '#26a69a',
-                }
-              },
-              {
-                left: 80 + 175,
-                top: '72%',
-                style: { 
-                  text: `DIF:${d.dif.toFixed(4)}  `,
-                  fill: '#1890ff',
-                }
-              },
-              {
-                left: 80 + 250,
-                top: '72%',
-                style: { 
-                  text: `DEA:${d.dea.toFixed(4)}`,
-                  fill: '#fa8c16',
-                }
-              }
-            ]
-          })
-        }
-      }
+  macdHist = chart.addSeries(HistogramSeries, {
+    priceFormat: { type: 'price', precision: 4, minMove: 0.0001 },
+    priceLineVisible: false,
+    lastValueVisible: false,
+    base: 0,
+  }, MACD_PANE)
+  difSeries = chart.addSeries(LineSeries, overlayOpts(DIF_COLOR), MACD_PANE)
+  deaSeries = chart.addSeries(LineSeries, overlayOpts(DEA_COLOR), MACD_PANE)
+
+  chart.panes()[MACD_PANE].setHeight(MACD_PANE_HEIGHT)
+  chart.subscribeCrosshairMove(onCrosshairMove)
+}
+
+const applyData = () => {
+  if (!chart || !allData.length) return
+
+  candleSeries.setData(allData.map(d => ({
+    time: d.trade_date,
+    open: d.open,
+    high: d.high,
+    low: d.low,
+    close: d.close,
+  })))
+
+  for (const ma of MA_LINES) {
+    maSeries[ma.key].setData(lineData(allData, ma.key))
+  }
+  for (const key of ['boll_upper', 'boll_mid', 'boll_lower']) {
+    bollSeries[key].setData(lineData(allData, key))
+  }
+
+  // 逐柱染色写在数据点上，不要为红绿柱建两个 series
+  macdHist.setData(allData.map(d => (
+    d.macd == null
+      ? { time: d.trade_date }
+      : { time: d.trade_date, value: d.macd, color: d.macd >= 0 ? UP_COLOR : DOWN_COLOR }
+  )))
+  difSeries.setData(lineData(allData, 'dif'))
+  deaSeries.setData(lineData(allData, 'dea'))
+
+  applyOverlayVisibility()
+  applyMarkers()
+  applyRange()
+  updateLegend(allData[allData.length - 1])
+}
+
+const applyOverlayVisibility = () => {
+  if (!chart) return
+  const selected = visibleOverlays.value
+  for (const ma of MA_LINES) {
+    maSeries[ma.key]?.applyOptions({ visible: selected.includes(ma.key) })
+  }
+  const showBoll = selected.includes('boll')
+  for (const key of ['boll_upper', 'boll_mid', 'boll_lower']) {
+    bollSeries[key]?.applyOptions({ visible: showBoll })
+  }
+}
+
+const applyMarkers = () => {
+  if (!candleSeries) return
+
+  // marker 的 time 必须与 K 线上已有的时间点完全一致，否则会被静默丢弃
+  const validDates = new Set(allData.map(d => d.trade_date))
+  const markers = []
+
+  const push = (date, opts) => {
+    if (date && validDates.has(date)) markers.push({ time: date, ...opts })
+  }
+
+  const result = props.strategyResult
+  if (result) {
+    push(result.breakdown_date, { position: 'belowBar', color: '#faad14', shape: 'arrowUp', text: '跌破' })
+    push(result.rise_date, { position: 'aboveBar', color: UP_COLOR, shape: 'arrowDown', text: '大涨' })
+    push(result.valley_date, { position: 'belowBar', color: DOWN_COLOR, shape: 'circle', text: '拐点' })
+    for (const d of result.matching_dates || []) {
+      push(d, { position: 'belowBar', color: DOWN_COLOR, shape: 'arrowUp', text: '站上MA5' })
     }
+    for (const d of result.falling_dates || []) {
+      push(d, { position: 'aboveBar', color: '#909399', shape: 'arrowDown', text: '' })
+    }
+  }
+
+  props.backtestSignals.forEach((s, i) => {
+    push(s.date, { position: 'belowBar', color: '#409eff', shape: 'arrowUp', text: `B${i + 1}` })
+  })
+
+  markers.sort((a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0))
+
+  if (markersPlugin) {
+    markersPlugin.setMarkers(markers)
+  } else {
+    markersPlugin = createSeriesMarkers(candleSeries, markers)
+  }
+}
+
+const applyRange = () => {
+  if (!chart || !allData.length) return
+  const days = rangeDays.value
+  if (!days || days >= allData.length) {
+    chart.timeScale().fitContent()
+    return
+  }
+  chart.timeScale().setVisibleLogicalRange({
+    from: allData.length - days,
+    to: allData.length - 1 + 6,
   })
 }
 
-const loadStockInfo = async () => {
+const onCrosshairMove = (param) => {
+  // 鼠标移出数据范围时 time 为 undefined
+  if (!param || param.time === undefined || !param.point) {
+    updateLegend(allData[allData.length - 1])
+    return
+  }
+
+  const bar = param.seriesData.get(candleSeries)
+  const row = bar ? { ...bar, trade_date: formatDate(param.time) } : null
+  if (!row) return
+
+  legend.date = row.trade_date
+  legend.open = toFixed(row.open)
+  legend.high = toFixed(row.high)
+  legend.low = toFixed(row.low)
+  legend.close = toFixed(row.close)
+  legend.tone = row.close >= row.open ? 'up' : 'down'
+
+  const source = allData.find(d => d.trade_date === row.trade_date)
+  legend.changePct = source?.change_pct != null ? `${toFixed(source.change_pct)}%` : '-'
+
+  for (const ma of MA_LINES) {
+    legend[ma.key] = toFixed(param.seriesData.get(maSeries[ma.key])?.value)
+  }
+  legend.dif = toFixed(param.seriesData.get(difSeries)?.value, 4)
+  legend.dea = toFixed(param.seriesData.get(deaSeries)?.value, 4)
+  const macdVal = param.seriesData.get(macdHist)?.value
+  legend.macd = toFixed(macdVal, 4)
+  legend.macdTone = macdVal == null ? 'flat' : macdVal >= 0 ? 'up' : 'down'
+}
+
+const updateLegend = (row) => {
+  if (!row) return
+  legend.date = row.trade_date
+  legend.open = toFixed(row.open)
+  legend.high = toFixed(row.high)
+  legend.low = toFixed(row.low)
+  legend.close = toFixed(row.close)
+  legend.changePct = row.change_pct != null ? `${toFixed(row.change_pct)}%` : '-'
+  legend.tone = row.close >= row.open ? 'up' : 'down'
+  for (const ma of MA_LINES) legend[ma.key] = toFixed(row[ma.key])
+  legend.dif = toFixed(row.dif, 4)
+  legend.dea = toFixed(row.dea, 4)
+  legend.macd = toFixed(row.macd, 4)
+  legend.macdTone = row.macd == null ? 'flat' : row.macd >= 0 ? 'up' : 'down'
+}
+
+// ---------- 数据加载 ----------
+// 数据到达与弹窗打开动画的先后顺序不确定，两边都调用 renderIfReady，
+// 由它判断「容器已挂载 且 数据已就绪」才真正建图。
+const dialogOpened = ref(false)
+
+const renderIfReady = () => {
+  if (!dialogOpened.value || !allData.length || !chartRef.value) return
+  if (!chart) buildChart()
+  applyData()
+}
+
+const onDialogOpened = () => {
+  dialogOpened.value = true
+  renderIfReady()
+}
+
+const loadAll = async () => {
+  const requestedCode = props.stockCode
+  loading.value = true
+  hasData.value = false
   try {
-    const res = await api.get(`/stocks/${props.stockCode}`)
-    if (res.code === 0) {
-      stockName.value = res.data.name || ''
-      stockBasicInfo.value = res.data
-    }
+    const start = new Date()
+    start.setDate(start.getDate() - FETCH_DAYS)
+    const [infoRes, klineRes] = await Promise.all([
+      api.get(`/stocks/${requestedCode}`),
+      api.get(`/stocks/${requestedCode}/kline`, {
+        params: { start_date: start.toISOString().slice(0, 10) },
+      }),
+    ])
+
+    // 请求返回时弹窗可能已关闭或切换了股票
+    if (!props.visible || props.stockCode !== requestedCode) return
+
+    stockName.value = infoRes.data?.name || ''
+    stockBasicInfo.value = infoRes.data || null
+
+    // lightweight-charts 要求数据按时间严格升序
+    allData = (klineRes.data?.klines || [])
+      .slice()
+      .sort((a, b) => (a.trade_date < b.trade_date ? -1 : a.trade_date > b.trade_date ? 1 : 0))
+
+    hasData.value = allData.length > 0
+    await nextTick()
+    if (!props.visible || props.stockCode !== requestedCode) return
+    renderIfReady()
   } catch (error) {
-    console.error(error)
+    console.error('加载 K 线失败:', error)
+  } finally {
+    if (props.stockCode === requestedCode) loading.value = false
   }
 }
 
-const loadKlineData = async () => {
-  try {
-    const res = await api.get(`/stocks/${props.stockCode}/kline`)
-    if (res.code === 0 && res.data.klines && res.data.klines.length > 0) {
-      allData = res.data.klines
-      await nextTick()
-      renderChart(allData)
-    }
-  } catch (error) {
-    console.error(error)
-  }
-}
-
-const handleClose = () => {
+const destroyChart = () => {
+  resizeObserver?.disconnect()
+  resizeObserver = null
   if (chart) {
-    chart.dispose()
-    chart = null
+    chart.unsubscribeCrosshairMove(onCrosshairMove)
+    chart.remove()
   }
+  chart = null
+  candleSeries = null
+  maSeries = {}
+  bollSeries = {}
+  macdHist = null
+  difSeries = null
+  deaSeries = null
+  markersPlugin = null
+}
+
+const handleClosed = () => {
+  dialogOpened.value = false
+  destroyChart()
+  allData = []
+  hasData.value = false
   stockName.value = ''
   stockBasicInfo.value = null
-  currentDate.value = ''
-  currentData.value = null
-  allData = []
+  Object.assign(legend, emptyLegend())
 }
 
-const handleResize = () => {
-  chart && chart.resize && chart.resize()
-}
+watch(() => [props.visible, props.stockCode], ([isVisible, code]) => {
+  if (!isVisible || !code) return
+  // destroy-on-close 会销毁容器 DOM，重开或切换股票时必须重建实例
+  destroyChart()
+  loadAll()
+}, { immediate: true })
 
-watch(() => props.visible, async (newVal) => {
-  if (newVal && props.stockCode) {
-    await nextTick()
-    await loadStockInfo()
-    await loadKlineData()
-    window.addEventListener('resize', handleResize)
-  } else {
-    window.removeEventListener('resize', handleResize)
-  }
+// 策略结果 / 回测信号变化时刷新标记，无需重建图表
+watch(() => [props.strategyResult, props.backtestSignals], () => {
+  if (chart && allData.length) applyMarkers()
 })
 
-onUnmounted(() => {
-  window.removeEventListener('resize', handleResize)
-  if (chart) {
-    chart.dispose()
-    chart = null
-  }
-})
+watch(visibleOverlays, applyOverlayVisibility)
+watch(rangeDays, applyRange)
+
+onUnmounted(destroyChart)
 </script>
+
+<style scoped>
+.kline-body {
+  min-height: 200px;
+}
+
+.basic-info {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+  padding: 12px 16px;
+  background: #fafbfd;
+  border: 1px solid #eef0f5;
+  border-radius: 8px;
+  margin-bottom: 12px;
+}
+
+.basic-info__cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.basic-info__label {
+  font-size: 12px;
+  color: #9aa0ac;
+}
+
+.basic-info__value {
+  font-size: 16px;
+  font-weight: 600;
+  color: #303133;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.toolbar__spacer {
+  flex: 1;
+}
+
+.chart-wrap {
+  position: relative;
+  width: 100%;
+  height: 560px;
+  border: 1px solid #eef0f5;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.chart {
+  width: 100%;
+  height: 100%;
+}
+
+.chart-empty {
+  position: absolute;
+  inset: 0;
+  background: #fff;
+}
+
+.legend {
+  position: absolute;
+  top: 8px;
+  left: 12px;
+  z-index: 3;
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  line-height: 18px;
+  pointer-events: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* 副图读数固定在 MACD 面板左上角 */
+.legend--macd {
+  top: auto;
+  bottom: 148px;
+}
+
+.legend__date {
+  font-weight: 600;
+  color: #303133;
+}
+
+.legend__title {
+  color: #9aa0ac;
+}
+
+.up {
+  color: #ef5350;
+}
+
+.down {
+  color: #26a69a;
+}
+
+.flat {
+  color: #9aa0ac;
+}
+
+.strategy-panel {
+  margin-top: 12px;
+  padding: 12px 16px;
+  background: #f6fbff;
+  border: 1px solid #e3f0fb;
+  border-radius: 8px;
+}
+
+.strategy-panel__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #303133;
+  margin-bottom: 8px;
+}
+
+.strategy-panel__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.strategy-panel__desc {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #909399;
+}
+</style>

@@ -1,7 +1,7 @@
-import os
-from fastapi import FastAPI, Depends, Query
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
 from app.utils.database import init_db
@@ -9,22 +9,27 @@ from app.utils.database import init_db
 from app.api import stocks, strategies, sync
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    yield
+
+
 app = FastAPI(
     title=settings.PROJECT_NAME,
     version=settings.VERSION,
+    lifespan=lifespan,
 )
 
+# 单机单用户，前端经 Vite 代理同源访问；不使用 Cookie 鉴权，故关闭 credentials
+# （allow_origins=["*"] 与 allow_credentials=True 组合会被浏览器判为非法）
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-@app.on_event("startup")
-def on_startup():
-    init_db()
 
 
 app.include_router(stocks.router, prefix=f"{settings.API_V1_PREFIX}/stocks", tags=["stocks"])

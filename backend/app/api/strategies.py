@@ -1,32 +1,32 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
 from typing import Optional
 from datetime import date
 from decimal import Decimal
 
 from app.utils.database import get_db
-from app.utils.response import success, error
+from app.utils.response import success
 from app.services import strategy_service
 from app.models.strategy_result import StrategyResult
-
-
-def convert_decimals(obj):
-    """递归将 Decimal 转为 float"""
-    if isinstance(obj, Decimal):
-        return float(obj)
-    elif isinstance(obj, dict):
-        return {k: convert_decimals(v) for k, v in obj.items()}
-    elif isinstance(obj, list):
-        return [convert_decimals(item) for item in obj]
-    return obj
 
 router = APIRouter()
 
 
+def convert_decimals(obj):
+    """递归将 Decimal 转为 float（JSON 列写库前需要）"""
+    if isinstance(obj, Decimal):
+        return float(obj)
+    if isinstance(obj, dict):
+        return {k: convert_decimals(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [convert_decimals(item) for item in obj]
+    return obj
+
+
 @router.get("")
 async def get_strategies():
-    strategies = strategy_service.get_available_strategies()
-    return success(data=strategies)
+    """返回策略清单，含各策略的参数声明（前端据此动态渲染表单）"""
+    return success(data=strategy_service.get_available_strategies())
 
 
 @router.get("/latest-result")
@@ -38,7 +38,7 @@ async def get_latest_strategy_result(
     result = db.query(StrategyResult).filter(
         StrategyResult.strategy_name == strategy_name
     ).order_by(StrategyResult.run_date.desc()).first()
-    
+
     if result:
         return success(data={
             "strategy_name": result.strategy_name,
@@ -58,76 +58,56 @@ async def get_latest_strategy_result(
 
 @router.post("/select")
 async def select_stocks(
+    request: Request,
     strategy_name: str = Query(..., description="策略名称"),
     min_market_cap: Optional[float] = Query(None, description="最小市值（亿元）"),
-    x_days: int = Query(30, description="往前找x天"),
-    y_days: int = Query(10, description="之后y天内（用于consecutive_ma5策略）"),
-    z_days: int = Query(2, description="连续z天"),
-    y_pct: float = Query(5.0, description="涨幅大于y%（用于rise_then_fall策略）"),
     db: Session = Depends(get_db)
 ):
+    """运行全市场选股。
+
+    策略专属参数不在此显式声明——由策略自己的 ParamSpec 从 query string 中解析，
+    因此新增策略无需改动本接口。
+    """
+    params = strategy_service.coerce_params(strategy_name, dict(request.query_params))
+
     results = strategy_service.run_strategy(
-        db,
-        strategy_name,
-        min_market_cap=min_market_cap,
-        x_days=x_days,
-        y_days=y_days,
-        z_days=z_days,
-        y_pct=y_pct
+        db, strategy_name, min_market_cap=min_market_cap, params=params
     )
-    
-    # 只有运行成功且有结果时，才更新数据库（避免更新失败丢失历史数据）
-    if results and len(results) > 0:
-        # 删除旧结果，只保留最新
+
+    # 只有运行出结果时才更新数据库（避免一次空跑冲掉上次的有效结果）
+    if results:
         db.query(StrategyResult).filter(
             StrategyResult.strategy_name == strategy_name
         ).delete()
-        
-        params = {
-            "min_market_cap": min_market_cap,
-            "x_days": x_days,
-            "y_days": y_days,
-            "z_days": z_days,
-            "y_pct": y_pct,
-        }
-        
-        new_result = StrategyResult(
+
+        db.add(StrategyResult(
             strategy_name=strategy_name,
             run_date=date.today(),
-            params=params,
+            params={"min_market_cap": min_market_cap, **params},
             total_count=len(results),
             results=convert_decimals(results),
-        )
-        db.add(new_result)
+        ))
         db.commit()
-    
+
     return success(data={
         "strategy_name": strategy_name,
-        "selected_stocks": results,
-        "total_count": len(results)
+        "selected_stocks": convert_decimals(results),
+        "total_count": len(results),
     })
 
 
 @router.get("/backtest")
 async def backtest_strategy(
+    request: Request,
     strategy_name: str = Query(..., description="策略名称"),
     stock_code: str = Query(..., description="股票代码"),
     start_year: int = Query(2020, description="回测起始年份"),
-    x_days: int = Query(30, description="往前找x天"),
-    y_days: int = Query(10, description="之后y天内"),
-    z_days: int = Query(2, description="连续z天"),
-    y_pct: float = Query(5.0, description="涨幅大于y%"),
     db: Session = Depends(get_db)
 ):
     """回测单只股票的策略，返回历史所有买点"""
+    params = strategy_service.coerce_params(strategy_name, dict(request.query_params))
+
     result = strategy_service.backtest_strategy(
-        db,
-        stock_code,
-        strategy_name,
-        start_year=start_year,
-        x_days=x_days,
-        y_days=y_days,
-        z_days=z_days,
-        y_pct=y_pct
+        db, stock_code, strategy_name, start_year=start_year, params=params
     )
     return success(data=convert_decimals(result))

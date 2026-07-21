@@ -23,6 +23,13 @@ _kline_rate_limiter = RateLimiter(KLINE_API_RATE_PER_SECOND)
 REQUEST_DELAY_MIN = 0.3
 REQUEST_DELAY_MAX = 0.6
 
+# 单次请求的最大返回条数。实测腾讯在 500/640/800 时正常，1000 与 2000 都只回 640 条，
+# 3000 以上直接返回空——不要随意调大。
+KLINE_PAGE_SIZE = 500
+
+# 向前翻页的页数上限（500 条/页 × 60 页 ≈ 120 年），纯粹作为死循环兜底
+MAX_KLINE_PAGES = 60
+
 KLINE_UPSERT_SQL = """
     INSERT INTO stock_kline (
         stock_code, trade_date, open, high, low, close, volume, amount,
@@ -252,40 +259,45 @@ def fetch_all_stocks_basic_info():
                 raise
 
 
+def _optional_float(val) -> Optional[float]:
+    """空值 / NaN 统一转 None，避免把 NaN 写进 DECIMAL 列。"""
+    if val is None or pd.isna(val):
+        return None
+    return float(val)
+
+
 def save_stocks_basic_info(df):
     with SessionLocal() as db:
+        # 一次性载入现有记录，避免逐行 SELECT（约 5000 行 → 5000 次查询）
+        existing_map = {s.code: s for s in db.query(StockBasic).all()}
+
         for _, row in df.iterrows():
-            existing = db.query(StockBasic).filter(StockBasic.code == row['代码']).first()
-            if existing:
-                existing.name = row['名称']
-                existing.total_cap = float(row['总市值'])
-                existing.pe_ratio = float(row['市盈率']) if row.get('市盈率') else None
-                existing.pb_ratio = float(row['市净率']) if row.get('市净率') else None
-                existing.ytd_change_pct = float(row['今年涨跌幅']) if row.get('今年涨跌幅') else None
-            else:
-                stock = StockBasic(
-                    code=row['代码'],
-                    name=row['名称'],
-                    market='SSE' if row['代码'].startswith('6') else 'SZSE',
-                    total_cap=float(row['总市值']),
-                    pe_ratio=float(row['市盈率']) if row.get('市盈率') else None,
-                    pb_ratio=float(row['市净率']) if row.get('市净率') else None,
-                    ytd_change_pct=float(row['今年涨跌幅']) if row.get('今年涨跌幅') else None,
-                )
+            code = row['代码']
+            stock = existing_map.get(code)
+            if stock is None:
+                stock = StockBasic(code=code, market='SSE' if code.startswith('6') else 'SZSE')
                 db.add(stock)
+
+            stock.name = row['名称']
+            stock.total_cap = _optional_float(row['总市值'])
+            stock.pe_ratio = _optional_float(row.get('市盈率'))
+            stock.pb_ratio = _optional_float(row.get('市净率'))
+            stock.ytd_change_pct = _optional_float(row.get('今年涨跌幅'))
+
         db.commit()
 
 
-def _fetch_kline_page(symbol: str, start_date: str, end_date: str) -> list:
+def _fetch_kline_page(symbol: str, start_date: str, end_date: str, count: int = None) -> list:
     """单次请求腾讯K线接口，返回原始kline列表（带限流和重试）。"""
+    count = count or KLINE_PAGE_SIZE
     max_retries = 3
     for retry_count in range(max_retries):
         if is_cancelled():
             return []
-        
+
         try:
-            url = f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={symbol},day,{start_date},{end_date},500,qfq"
-            
+            url = f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={symbol},day,{start_date},{end_date},{count},qfq"
+
             headers = {"Referer": "https://finance.qq.com"}
             _kline_rate_limiter.acquire()
             response = requests.get(url, headers=headers, timeout=15)
@@ -326,8 +338,48 @@ def _fetch_kline_page(symbol: str, start_date: str, end_date: str) -> list:
     return []
 
 
+def _fetch_kline_paged(symbol: str, start_dt, end_dt) -> list:
+    """从 end_dt 向前翻页拉满 [start_dt, end_dt]，返回原始 kline 列表。
+
+    腾讯接口的语义是「返回区间内数据，但最多 count 条；超出时从 end 往回截断」——
+    即请求 10 年只会拿到最后 500 条，早期数据被静默丢弃。所以不能按固定日历窗口
+    切页（页内交易日数一旦超过 count 就会缺口且无任何报错），必须用**上一页实际
+    返回的最早日期**决定下一页的终点，这样无论交易日疏密都不会漏。
+    """
+    all_klines = []
+    cursor_end = end_dt
+
+    for _ in range(MAX_KLINE_PAGES):
+        if cursor_end < start_dt or is_cancelled():
+            break
+
+        page = _fetch_kline_page(
+            symbol, start_dt.strftime("%Y-%m-%d"), cursor_end.strftime("%Y-%m-%d")
+        )
+        if not page:
+            break
+
+        all_klines.extend(page)
+
+        # 页内首行即该页最早一天（腾讯按日期升序返回）
+        try:
+            earliest = datetime.strptime(page[0][0], "%Y-%m-%d").date()
+        except (ValueError, IndexError, TypeError):
+            break
+
+        # 已回溯到请求起点，或本页未被截断（说明区间已取完）
+        if earliest <= start_dt or len(page) < KLINE_PAGE_SIZE:
+            break
+
+        cursor_end = earliest - timedelta(days=1)
+    else:
+        print(f"[WARN] {symbol} 分页达到上限 {MAX_KLINE_PAGES} 页，可能未取全历史", flush=True)
+
+    return all_klines
+
+
 def fetch_one_stock_history(stock_code: str, start_date: str, end_date: str, history_data: list = None):
-    """获取股票历史 K 线数据（分页拉取，每次约1年，避免超过腾讯API返回上限）。"""
+    """获取股票历史 K 线数据（自 end_date 向前分页拉取，见 _fetch_kline_paged）。"""
     if '-' not in start_date:
         start_date_clean = f"{start_date[:4]}-{start_date[4:6]}-{start_date[6:]}"
     else:
@@ -342,25 +394,9 @@ def fetch_one_stock_history(stock_code: str, start_date: str, end_date: str, his
     
     start_dt = datetime.strptime(start_date_clean, "%Y-%m-%d").date()
     end_dt = datetime.strptime(end_date_clean, "%Y-%m-%d").date()
-    
-    all_klines = []
-    current_start = start_dt
-    
-    while current_start <= end_dt:
-        current_end = current_start + timedelta(days=600)
-        if current_end > end_dt:
-            current_end = end_dt
-        
-        page_start = current_start.strftime("%Y-%m-%d")
-        page_end = current_end.strftime("%Y-%m-%d")
-        
-        klines = _fetch_kline_page(symbol, page_start, page_end)
-        
-        if klines:
-            all_klines.extend(klines)
-        
-        current_start = current_end + timedelta(days=1)
-    
+
+    all_klines = _fetch_kline_paged(symbol, start_dt, end_dt)
+
     if not all_klines:
         return pd.DataFrame()
     
@@ -424,6 +460,39 @@ def fetch_one_stock_history(stock_code: str, start_date: str, end_date: str, his
         df['amplitude'] = ((df['high'] - df['low']) / df['close'].shift(1)) * 100
     
     return df
+
+
+# 前复权收盘价的允许误差（元）。腾讯返回 2 位小数，超过这个幅度即判定复权因子已变化。
+QFQ_DRIFT_TOLERANCE = 0.011
+
+
+def has_dividend_event(df: pd.DataFrame) -> bool:
+    """新拉取的区间内是否出现除权除息标记。"""
+    if df is None or len(df) == 0 or 'dividend_info' not in df.columns:
+        return False
+    return bool(df['dividend_info'].notna().any())
+
+
+def detect_qfq_drift(df: pd.DataFrame, existing_closes: Dict[Any, float]) -> Optional[str]:
+    """比对新数据与库中同一交易日的前复权收盘价。
+
+    除权除息后，腾讯会用新的复权因子重算**全部**历史价格，因此重叠日期的收盘价
+    会整体变化。检测到变化说明库里的历史数据已按旧因子失效，必须全量重拉。
+    返回差异描述；无差异返回 None。
+    """
+    if df is None or len(df) == 0 or not existing_closes:
+        return None
+
+    for row in df.itertuples(index=False):
+        old_close = existing_closes.get(row.trade_date)
+        if old_close is None:
+            continue
+        new_close = getattr(row, 'close', None)
+        if new_close is None or pd.isna(new_close):
+            continue
+        if abs(float(new_close) - float(old_close)) > QFQ_DRIFT_TOLERANCE:
+            return f"{row.trade_date} 收盘价 {float(old_close)} → {float(new_close)}"
+    return None
 
 
 def get_latest_sync_date() -> Optional[str]:

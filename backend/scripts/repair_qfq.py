@@ -4,7 +4,8 @@
   cd backend && python scripts/repair_qfq.py              # 全量修复（100亿市值以上）
   cd backend && python scripts/repair_qfq.py 300502       # 只修复指定股票
 功能：
-  1. 从腾讯财经重新拉取前复权(qfq)K线数据（400天/页分页拉取）
+  1. 从腾讯财经重新拉取前复权(qfq)K线数据
+     （分页逻辑复用 sync_service._fetch_kline_paged：自 end 向前翻页，500 条/页）
   2. 全量覆盖更新 stock_kline 表，确保价格是前复权的
   3. 重新计算所有技术指标（MA、布林、MACD等）
   4. 只处理市值100亿以上的股票
