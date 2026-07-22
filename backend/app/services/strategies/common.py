@@ -12,12 +12,21 @@ from app.models.stock_kline import StockKline
 STRATEGY_COLUMNS = (
     StockKline.stock_code,
     StockKline.trade_date,
-    StockKline.close,
+    StockKline.open,
+    StockKline.high,
     StockKline.low,
+    StockKline.close,
     StockKline.change_pct,
     StockKline.ma5,
+    StockKline.ma10,
+    StockKline.ma20,
+    StockKline.ma30,
     StockKline.ma60,
+    StockKline.boll_upper,
+    StockKline.boll_mid,
     StockKline.boll_lower,
+    StockKline.dif,
+    StockKline.dea,
     StockKline.macd,
 )
 

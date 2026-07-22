@@ -12,6 +12,7 @@
         >
           <el-menu-item index="/">股票列表</el-menu-item>
           <el-menu-item index="/strategy">选股策略</el-menu-item>
+          <el-menu-item index="/backtest">策略回测</el-menu-item>
           <el-menu-item index="/sync">数据同步</el-menu-item>
         </el-menu>
       </el-aside>

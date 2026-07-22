@@ -47,4 +47,10 @@ export const backtestStrategy = ({ strategyName, stockCode, startYear = 2020, pa
 
 export const syncBasicInfo = () => api.post('/sync/sync-basic-info')
 
+// ---------- 回测 ----------
+export const getBacktestRules = () => api.get('/backtest/rules')
+
+export const runBacktest = (payload) =>
+  api.post('/backtest/run', payload, { timeout: 300000 })
+
 export default api

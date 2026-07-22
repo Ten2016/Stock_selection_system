@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.utils.database import init_db
 
-from app.api import stocks, strategies, sync
+from app.api import backtest, stocks, strategies, sync
 
 
 @asynccontextmanager
@@ -35,6 +35,7 @@ app.add_middleware(
 app.include_router(stocks.router, prefix=f"{settings.API_V1_PREFIX}/stocks", tags=["stocks"])
 app.include_router(strategies.router, prefix=f"{settings.API_V1_PREFIX}/strategies", tags=["strategies"])
 app.include_router(sync.router, prefix=f"{settings.API_V1_PREFIX}/sync", tags=["sync"])
+app.include_router(backtest.router, prefix=f"{settings.API_V1_PREFIX}/backtest", tags=["backtest"])
 
 
 @app.get("/")

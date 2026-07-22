@@ -110,6 +110,25 @@ def _lows_rising(wave, prev_wave) -> bool:
     return wave['min_low'] > prev_wave['min_low']
 
 
+def _min_low_until(klines: List, start_idx: int, until_idx: int):
+    """截至 until_idx 为止的波段最低价。
+
+    `find_green_waves` 给出的 min_low 是**整个波段**的最低价，而波段结束点可能
+    晚于买点——在买点当天用它就是未来函数。回测必须只用已经发生的部分。
+    """
+    lows = [
+        klines[k].low for k in range(start_idx, min(until_idx, len(klines) - 1) + 1)
+        if klines[k].low is not None
+    ]
+    if not lows:
+        return None, None
+    min_low = min(lows)
+    for k in range(start_idx, min(until_idx, len(klines) - 1) + 1):
+        if klines[k].low == min_low:
+            return min_low, klines[k].trade_date
+    return min_low, None
+
+
 class MacdGreenPullbackStrategy(BaseStrategy):
     meta = StrategyMeta(
         name='macd_green_pullback',
@@ -155,32 +174,61 @@ class MacdGreenPullbackStrategy(BaseStrategy):
     ) -> List[dict]:
         """按波段扫描历史买点。
 
-        比基类的逐日重放快得多：绿柱波段只需切分一次，每个波段取第一个满足
-        「缩短确认」的交易日作为买点。
+        比基类的逐日重放快一个数量级：绿柱波段只需切分一次。
+
+        **但波段的谷底和最低价都必须按「截至当日」重新求**——`find_green_waves`
+        给出的 valley_idx / min_low 是整个波段的极值，而波段结束点可能晚于买点。
+        直接拿来用会让买点依赖尚未发生的行情（已被截断测试抓到过两次）。
         """
         waves = find_green_waves(klines, min_days=min_wave_days, tolerate_red=tolerate_red)
         signals = []
+        last_idx = len(klines) - 1
 
         for idx in range(1, len(waves)):
             wave, prev_wave = waves[idx], waves[idx - 1]
-            valley_idx = wave['valley_idx']
+            start = wave['start_idx']
 
-            if klines[valley_idx].trade_date.year < start_year:
-                continue
-            if not _lows_rising(wave, prev_wave):
+            # 上一波段完全在过去，可以直接用它的极值
+            if prev_wave['min_low'] is None:
                 continue
 
-            upper = min(valley_idx + y_days, len(klines) - 1)
-            for signal_idx in range(valley_idx + confirm_days, upper + 1):
-                if not _is_shortening(klines, valley_idx, signal_idx):
-                    break
-                bar = klines[signal_idx]
+            running_valley = start
+            running_macd = klines[start].macd
+
+            for j in range(start, min(wave['end_idx'], last_idx) + 1):
+                macd = klines[j].macd
+
+                # 刚创出新低 → 谷底右移，当日不可能是「缩短确认」点
+                if macd is not None and (running_macd is None or macd < running_macd):
+                    running_valley, running_macd = j, macd
+                    continue
+
+                # 波段长度、确认天数、时效窗口都按截至 j 的已知信息判定
+                if j - start + 1 < min_wave_days:
+                    continue
+                if not (confirm_days <= j - running_valley <= y_days):
+                    continue
+                if klines[j].trade_date.year < start_year:
+                    continue
+                if not _is_shortening(klines, running_valley, j):
+                    continue
+
+                min_low, min_low_date = _min_low_until(klines, start, j)
+                wave_so_far = {
+                    **wave, 'min_low': min_low, 'min_low_date': min_low_date,
+                    'valley_idx': running_valley, 'valley_macd': running_macd,
+                }
+                if not _lows_rising(wave_so_far, prev_wave):
+                    continue
+
+                bar = klines[j]
                 signals.append({
                     'date': bar.trade_date.strftime('%Y-%m-%d'),
                     'close': float(bar.close) if bar.close is not None else None,
-                    **_build_result(klines, wave, prev_wave, valley_idx, signal_idx, y_days, confirm_days),
+                    **_build_result(klines, wave_so_far, prev_wave, running_valley, j,
+                                    y_days, confirm_days),
                 })
-                break
+                break   # 每个波段只取第一个买点
 
         return signals
 

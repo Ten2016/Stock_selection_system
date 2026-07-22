@@ -18,7 +18,7 @@
 1. **K 线同步**：拉取前复权 K 线，线程池拉取 + 独立线程攒批 upsert
 2. **技术指标**：MA5/10/20/30/60、布林带、MACD（DIF/DEA/MACD 柱，4 位小数，EMA 计算）
 3. **K 线图**：lightweight-charts 单 chart 双 pane（主图 K 线+均线+布林带，副图 MACD），时间轴与十字光标原生联动
-4. **选股与回测**：4 套策略，支持全市场筛选与单股历史回测
+4. **选股与回测**：4 套买入条件 × 9 条卖出规则（支持 AND/OR 组合），全市场筛选、单股回测与批量聚合
 5. **股票管理**：列表搜索/排序、跳过列表、数据清理
 
 ## 关键约束
@@ -39,7 +39,18 @@
    不要在 API 层或前端另写一份参数列表。
 10. **策略只能读 `STRATEGY_COLUMNS` 里的列**：`services/strategies/common.py` 按列 SELECT，策略拿到的是 Row 不是 ORM 实体。用新字段前先把列加进去。
 11. **图表实例不能放进 `ref()`/`reactive()`**：Vue 的 Proxy 会破坏 lightweight-charts 内部实例判等，`seriesData.get(series)` 会取不到值。用普通 `let`。
-12. **单用户约束**：不引入分布式方案，不做多租户。
+12. **回测禁止未来函数**，四道闸不可破：① 规则只拿 `bars[:i+1]`；② 信号次日成交
+    （当日收盘价成交 = cheat-on-close 作弊）；③ 出场只用 close 判定，不用 high/low
+    猜 bar 内路径；④ 一字涨停不可买、一字跌停不可卖。
+    **新增买入条件或卖出规则后必须跑截断测试**（`bars[:N]` 与 `bars[:N+80]` 的历史交易须逐字一致）。
+    第 ② 条对**卖出**开了例外：默认当日尾盘成交（多数技术信号收盘前半小时已定型）。
+    这属于 cheat-on-close，会让回测偏乐观，故提供 `exit_timing=next_day` 全局对照开关，
+    评估策略时**必须两种时点各跑一遍**——差异远小于噪声才说明收益不是来自这个假设。
+    买入仍走次日，不要改。
+13. **稀疏持仓不报 Sharpe/Sortino/Beta**：空仓期会把这些指标压成仓位暴露的副产品，
+    与策略优劣无关。批量聚合也不做跨股 Sharpe/回撤平均（无可解释含义），
+    改用交易池合并 + 截面中位数。
+14. **单用户约束**：不引入分布式方案，不做多租户。
 
 ## 核心数据表
 - **stock_basic**：股票基本信息（代码、名称、市值(亿元)、PE、PB）
@@ -50,7 +61,9 @@
 ## 开发原则
 - 新增 API：`app/api/` 加路由 → `app/services/` 加业务 → `main.py` 注册
 - 新增指标：`indicator_service` 计算 → `stock_kline` 加字段 → `sync_service` UPSERT → 补算脚本 → `to_dict()` 的 `_FLOAT_FIELDS`
-- 新增策略：**只需在 `services/strategies/` 新建一个文件**，继承 `BaseStrategy`、定义 `meta`/`check()`、
+- 新增卖出规则：**只需在 `services/backtest/exits/` 新建一个文件**，继承 `BaseExitRule`、
+  定义 `meta`/`should_exit()`、末尾 `STRATEGY = XxxExit()`。注册表自动发现，前端零改动
+- 新增买入条件：**只需在 `services/strategies/` 新建一个文件**，继承 `BaseStrategy`、定义 `meta`/`check()`、
   末尾 `STRATEGY = XxxStrategy()`。注册表自动发现，API 与前端零改动（详见 PROJECT_CONTEXT §10.4）
 - DB Session：API 层用 `Depends(get_db)`；后台任务用 `with SessionLocal() as db:`
 - 全市场遍历务必用批量查询（`load_klines_bulk`），不要逐股 SELECT
