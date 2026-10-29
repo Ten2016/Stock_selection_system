@@ -14,7 +14,7 @@ class StockBasic(Base):
     total_cap = Column(DECIMAL(20, 2))
     industry = Column(String(50))
     list_date = Column(Date)
-    pe_ratio = Column(DECIMAL(10, 2))  # 动态市盈率（TTM）
+    pe_ratio = Column(DECIMAL(10, 2))  # 动态市盈率
     pe_ratio_static = Column(DECIMAL(10, 2))  # 静态市盈率
     pb_ratio = Column(DECIMAL(10, 2))  # 市净率
     ytd_change_pct = Column(DECIMAL(10, 2))  # 今年涨跌幅

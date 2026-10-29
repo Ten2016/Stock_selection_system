@@ -23,6 +23,9 @@ class AboveMa60Strategy(BaseStrategy):
     # MA60 需要 60 根才有值，再加上观察窗口
     min_klines = 80
 
+    def required_klines(self, y_days: int = 5, **params) -> int:
+        return max(self.min_klines, y_days + 60)
+
     def check(self, klines: List, y_days: int = 5, z_days: int = 3) -> Optional[dict]:
         if len(klines) < y_days + 60:
             return None

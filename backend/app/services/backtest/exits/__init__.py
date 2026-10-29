@@ -5,26 +5,33 @@
 
 import importlib
 import pkgutil
+from threading import Lock
 from typing import Dict, List, Optional
 
 from ..base import BaseExitRule
 
 _registry: Dict[str, BaseExitRule] = {}
 
+_discovery_lock = Lock()
+
 
 def _discover() -> None:
-    if _registry:
-        return
-    for module_info in pkgutil.iter_modules(__path__):
-        if module_info.name.startswith('_'):
-            continue
-        module = importlib.import_module(f'{__name__}.{module_info.name}')
-        rule = getattr(module, 'STRATEGY', None)
-        if rule is None:
-            continue
-        if rule.meta.name in _registry:
-            raise RuntimeError(f'出场规则标识重复：{rule.meta.name}')
-        _registry[rule.meta.name] = rule
+    with _discovery_lock:
+        if _registry:
+            return
+        discovered = {}
+        for module_info in pkgutil.iter_modules(__path__):
+            if module_info.name.startswith('_'):
+                continue
+            module = importlib.import_module(f'{__name__}.{module_info.name}')
+            rule = getattr(module, 'STRATEGY', None)
+            if rule is None:
+                continue
+            if rule.meta.name in discovered:
+                raise RuntimeError(f'出场规则标识重复：{rule.meta.name}')
+            discovered[rule.meta.name] = rule
+
+        _registry.update(discovered)
 
 
 def get_exit_rule(name: str) -> Optional[BaseExitRule]:

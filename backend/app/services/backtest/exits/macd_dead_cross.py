@@ -11,7 +11,6 @@ class MacdDeadCrossExit(BaseExitRule):
         display_name='MACD死叉',
         description='DIF 下穿 DEA 即卖出',
         priority=50,
-        same_day_exec=True,
         params=[],
     )
 

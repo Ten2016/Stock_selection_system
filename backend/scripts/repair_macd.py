@@ -132,6 +132,7 @@ def main():
                 total_rows += n
                 success_count += 1
             except Exception as e:
+                conn.rollback()
                 fail_count += 1
                 print(f"  ❌ {code} 失败: {e}")
             

@@ -21,6 +21,9 @@ class ConsecutiveMa5Strategy(BaseStrategy):
         ],
     )
 
+    def required_klines(self, x_days: int = 30, y_days: int = 10, z_days: int = 2) -> int:
+        return max(self.min_klines, max(x_days, y_days, z_days) + 10)
+
     def check(self, klines: List, x_days: int = 30, y_days: int = 10, z_days: int = 2) -> Optional[dict]:
         if len(klines) < max(x_days, y_days, z_days) + 10:
             return None

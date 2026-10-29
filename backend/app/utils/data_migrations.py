@@ -2,6 +2,37 @@ import json
 from sqlalchemy import text
 
 
+def ensure_kline_indexes(conn):
+    """保留代码与日期唯一索引，仅清理已被覆盖的已知冗余索引。"""
+    if conn.dialect.name != 'sqlite':
+        return
+    indexes = conn.exec_driver_sql('PRAGMA index_list("stock_kline")').fetchall()
+    columns = {}
+    for index in indexes:
+        name = index[1].replace('"', '""')
+        columns[index[1]] = tuple(row[2] for row in conn.exec_driver_sql(
+            f'PRAGMA index_info("{name}")'
+        ))
+    if not any(index[2] and not index[4] and columns[index[1]] == ('stock_code', 'trade_date')
+               for index in indexes):
+        conn.exec_driver_sql(
+            'CREATE UNIQUE INDEX uq_stock_kline_code_date ON stock_kline(stock_code, trade_date)'
+        )
+    if not any(not index[4] and columns[index[1]][:1] == ('trade_date',) for index in indexes):
+        conn.exec_driver_sql('CREATE INDEX ix_stock_kline_trade_date ON stock_kline(trade_date)')
+    redundant = {
+        'idx_stock_code_trade_date': ('stock_code', 'trade_date'),
+        'ix_stock_kline_stock_code': ('stock_code',),
+    }
+    primary = [(row[1], row[2]) for row in conn.exec_driver_sql('PRAGMA table_info("stock_kline")') if row[5]]
+    if primary == [('id', 'INTEGER')]:
+        redundant['ix_stock_kline_id'] = ('id',)
+    for index in indexes:
+        name = index[1]
+        if not index[2] and name in redundant and columns[name] == redundant[name]:
+            conn.exec_driver_sql(f'DROP INDEX "{name}"')
+
+
 def sanitize_jsonish_value(value):
     if value is None:
         return None

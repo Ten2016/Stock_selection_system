@@ -118,13 +118,13 @@ def _min_low_until(klines: List, start_idx: int, until_idx: int):
     """
     lows = [
         klines[k].low for k in range(start_idx, min(until_idx, len(klines) - 1) + 1)
-        if klines[k].low is not None
+        if klines[k].low is not None and klines[k].macd is not None and klines[k].macd < 0
     ]
     if not lows:
         return None, None
     min_low = min(lows)
     for k in range(start_idx, min(until_idx, len(klines) - 1) + 1):
-        if klines[k].low == min_low:
+        if klines[k].low == min_low and klines[k].macd is not None and klines[k].macd < 0:
             return min_low, klines[k].trade_date
     return min_low, None
 
@@ -159,6 +159,8 @@ class MacdGreenPullbackStrategy(BaseStrategy):
         latest_idx = len(klines) - 1
         valley_idx = wave['valley_idx']
 
+        if latest_idx - wave['end_idx'] > tolerate_red:
+            return None
         if not (confirm_days <= latest_idx - valley_idx <= y_days):
             return None
         if not _is_shortening(klines, valley_idx, latest_idx):
@@ -194,9 +196,12 @@ class MacdGreenPullbackStrategy(BaseStrategy):
 
             running_valley = start
             running_macd = klines[start].macd
+            known_end = start
 
-            for j in range(start, min(wave['end_idx'], last_idx) + 1):
+            for j in range(start, min(wave['end_idx'] + tolerate_red, last_idx) + 1):
                 macd = klines[j].macd
+                if macd is not None and macd < 0:
+                    known_end = j
 
                 # 刚创出新低 → 谷底右移，当日不可能是「缩短确认」点
                 if macd is not None and (running_macd is None or macd < running_macd):
@@ -204,7 +209,7 @@ class MacdGreenPullbackStrategy(BaseStrategy):
                     continue
 
                 # 波段长度、确认天数、时效窗口都按截至 j 的已知信息判定
-                if j - start + 1 < min_wave_days:
+                if known_end - start + 1 < min_wave_days or j + 1 < self.min_klines:
                     continue
                 if not (confirm_days <= j - running_valley <= y_days):
                     continue

@@ -17,7 +17,6 @@ class FixedDaysExit(BaseExitRule):
         display_name='固定持有期',
         description='持有满 N 个交易日后无条件卖出',
         priority=90,
-        same_day_exec=True,
         params=[ParamSpec('hold_days', '持有', 5, '个交易日', minimum=1, maximum=250)],
     )
 

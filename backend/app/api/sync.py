@@ -1,12 +1,12 @@
 import queue
 import time
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import CancelledError, ThreadPoolExecutor, as_completed
 from fastapi import APIRouter, Depends, BackgroundTasks
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
 
-from app.utils.database import get_db
+from app.utils.database import get_db, SessionLocal
 from app.utils.response import success, error
 from app.utils.sync_state import sync_status, begin_sync, end_sync, request_cancel, update_counts, is_cancelled
 from app.services import sync_service, stock_service
@@ -16,15 +16,15 @@ router = APIRouter()
 
 # 拉取与入库流水线参数
 FETCH_WORKERS = 4
-SAVE_QUEUE_MAXSIZE = 30
-BATCH_SAVE_SIZE = 40
+SAVE_QUEUE_MAXSIZE = 8
+BATCH_SAVE_SIZE = 8
 
 # 同步区间向前扩展的天数：覆盖节假日/周末，保证与库中已有数据存在重叠日，
 # 复权漂移检测依赖这段重叠来判断历史价格是否已失效。
 SYNC_BUFFER_DAYS = 10
 
-# 指标上下文预加载天数（不写库，仅参与 MA60/MACD 计算）
-INDICATOR_CONTEXT_DAYS = 120
+# 新股票额外拉取历史，供 MA60 / MACD 初始化，并保存作为后续计算起点。
+INITIAL_CONTEXT_DAYS = 365
 
 
 class SyncRequest(BaseModel):
@@ -32,172 +32,134 @@ class SyncRequest(BaseModel):
     end_date: str
 
 
-def _load_sync_context(db, stock_codes, context_start, fetch_start, fetch_end):
-    """一次性加载同步所需的三份上下文，避免在拉取阶段回查数据库。
-
-    返回 {code: {"history": [...], "overlap": {date: close}, "earliest": date}}
-      - history：fetch_start 之前的 close，作为指标计算上下文
-      - overlap：fetch_start~fetch_end 内库中已有的 close，用于复权漂移检测
-      - earliest：该股票在库中的最早交易日，全量重拉时作为起点
-    """
+def _load_sync_context(db, stock_code, fetch_start, fetch_end):
+    """按股票读取完整收盘价序列，避免截断 EMA，也限制并发内存占用。"""
     from app.models.stock_kline import StockKline
-    from sqlalchemy import func
 
-    if not stock_codes:
-        return {}
-
-    context = {
-        code: {"history": [], "overlap": {}, "earliest": None}
-        for code in stock_codes
+    rows = db.query(StockKline.trade_date, StockKline.close).filter(
+        StockKline.stock_code == stock_code
+    ).order_by(StockKline.trade_date.asc()).all()
+    earliest = rows[0].trade_date if rows else None
+    latest = rows[-1].trade_date if rows else None
+    if latest:
+        fetch_start = min(fetch_start, latest)
+        fetch_end = max(fetch_end, latest)
+    else:
+        fetch_start -= timedelta(days=INITIAL_CONTEXT_DAYS)
+    return {
+        'earliest': earliest,
+        'fetch_start': fetch_start,
+        'fetch_end': fetch_end,
+        'history': [{'trade_date': day, 'close': float(close)}
+                    for day, close in rows if day < fetch_start],
+        'overlap': {day: float(close) for day, close in rows if day >= fetch_start},
+        'stored_dates': {day for day, _ in rows},
     }
 
-    rows = db.query(
-        StockKline.stock_code, StockKline.trade_date, StockKline.close
-    ).filter(
-        StockKline.stock_code.in_(stock_codes),
-        StockKline.trade_date >= context_start,
-        StockKline.trade_date <= fetch_end,
-    ).order_by(StockKline.stock_code.asc(), StockKline.trade_date.asc()).all()
 
-    for code, trade_date, close in rows:
-        entry = context.get(code)
-        if entry is None or close is None:
-            continue
-        if trade_date < fetch_start:
-            entry["history"].append({'trade_date': trade_date, 'close': float(close)})
-        else:
-            entry["overlap"][trade_date] = float(close)
-
-    earliest_rows = db.query(
-        StockKline.stock_code, func.min(StockKline.trade_date)
-    ).filter(
-        StockKline.stock_code.in_(stock_codes)
-    ).group_by(StockKline.stock_code).all()
-
-    for code, earliest in earliest_rows:
-        if code in context:
-            context[code]["earliest"] = earliest
-
-    return context
-
-
-def _process_single_stock(stock, start_date, end_date, skipped_codes, sync_context, skip_check=True):
+def _process_single_stock(stock, start_date, end_date, skipped_codes, skip_check=True):
     stock_code = stock.code
-    stock_name = stock.name
     result = {
-        "stock_code": stock_code,
-        "stock_name": stock_name,
-        "status": "pending",
-        "reason": None,
-        "kline_data": None,
-        "full_resync": False,
+        'stock_code': stock_code, 'stock_name': stock.name,
+        'status': 'pending', 'reason': None, 'kline_data': None, 'full_resync': False,
     }
-
     try:
+        if is_cancelled():
+            raise CancelledError()
         if skip_check:
             from app.utils.skipped_stocks import is_skipped
             if is_skipped(stock_code, cached_codes=skipped_codes):
-                result["status"] = "skipped"
-                result["reason"] = "在跳过列表中"
+                result.update(status='skipped', reason='在跳过列表中')
                 return result
 
-        ctx = sync_context.get(stock_code) or {"history": [], "overlap": {}, "earliest": None}
+        start = datetime.strptime(start_date.replace('-', ''), '%Y%m%d').date()
+        end = datetime.strptime(end_date.replace('-', ''), '%Y%m%d').date()
+        with SessionLocal() as db:
+            ctx = _load_sync_context(db, stock_code, start, end)
+        fetch_start, fetch_end = ctx['fetch_start'], ctx['fetch_end']
         kline_data = sync_service.fetch_one_stock_history(
-            stock_code, start_date, end_date, ctx["history"]
+            stock_code, fetch_start.isoformat(), fetch_end.isoformat(), ctx['history']
         )
-
-        if len(kline_data) == 0:
-            result["status"] = "no_data"
-            result["reason"] = "no data available"
+        if is_cancelled():
+            raise CancelledError()
+        if kline_data.empty:
+            if ctx['overlap']:
+                raise ValueError('上游未返回区间内已有的历史数据，未覆盖本地数据')
+            result.update(status='no_data', reason='区间内无交易数据')
             return result
 
-        resync_reason = _need_full_resync(kline_data, ctx, start_date)
+        resync_reason = _need_full_resync(kline_data, ctx, fetch_start.isoformat())
         if resync_reason:
-            # 复权因子已变，库中全部历史价格失效，从最早一条重新拉取覆盖
-            full_start = ctx["earliest"].strftime("%Y%m%d")
-            print(f"[QFQ] {stock_code} {stock_name} 全量重拉（{full_start} 起）：{resync_reason}", flush=True)
+            fetch_start = min(ctx['earliest'], fetch_start)
+            print(f'[QFQ] {stock_code} 全量重拉：{resync_reason}', flush=True)
             kline_data = sync_service.fetch_one_stock_history(
-                stock_code, full_start, end_date, None
+                stock_code, fetch_start.isoformat(), fetch_end.isoformat()
             )
-            result["full_resync"] = True
-            result["reason"] = resync_reason
-
-        if len(kline_data) > 0:
-            result["status"] = "success"
-            result["kline_data"] = kline_data
-        else:
-            result["status"] = "no_data"
-            result["reason"] = "no data available"
-
-    except Exception as e:
-        result["status"] = "failed"
-        result["reason"] = str(e)
+            result.update(full_resync=True, reason=resync_reason)
+        if is_cancelled():
+            raise CancelledError()
+        if kline_data.empty:
+            raise ValueError('全量重拉未返回数据，未覆盖本地数据')
+        expected_dates = {day for day in ctx['stored_dates'] if fetch_start <= day <= fetch_end}
+        missing_dates = expected_dates - set(kline_data['trade_date'])
+        if missing_dates:
+            raise ValueError(f'上游缺少 {len(missing_dates)} 个已存交易日（最早 {min(missing_dates)}），未覆盖本地数据')
+        result.update(status='success', kline_data=kline_data)
+    except CancelledError:
+        result['status'] = 'cancelled'
+    except Exception as exc:
+        result.update(status='failed', reason=str(exc))
         import traceback
         traceback.print_exc()
-
     return result
 
 
 def _need_full_resync(kline_data, ctx, fetch_start: str):
-    """判断该股票是否需要全量重拉，返回原因；不需要则返回 None。
-
-    主判据是**前复权价格漂移**：除权除息后腾讯会用新因子重算全部历史，
-    重叠日期的收盘价随之变化。这个判据同时保证了幂等——重拉之后价格一致，
-    下次同步不会重复触发。
-    """
-    earliest = ctx.get("earliest")
-    if not earliest:
-        # 库中本来就没有该股票的历史数据，没有需要修正的对象
+    """重叠价格变化或无法验证衔接时，整只股票统一复权口径。"""
+    earliest = ctx.get('earliest')
+    fetch_start_date = datetime.strptime(fetch_start.replace('-', ''), '%Y%m%d').date()
+    if not earliest or earliest >= fetch_start_date:
         return None
-
-    fetch_start_date = datetime.strptime(fetch_start.replace('-', ''), "%Y%m%d").date()
-    if earliest >= fetch_start_date:
-        # 已有数据都在本次拉取范围内，会被直接覆盖，无需额外处理
-        return None
-
-    drift = sync_service.detect_qfq_drift(kline_data, ctx.get("overlap") or {})
+    overlap = ctx.get('overlap') or {}
+    if not set(kline_data['trade_date']).intersection(overlap):
+        return '无共同交易日，无法确认复权口径一致'
+    drift = sync_service.detect_qfq_drift(kline_data, overlap)
     if drift:
-        return f"前复权价格变化（{drift}）"
-
-    # 无重叠日可比对时无法判断，若区间内确实出现除权除息则保守重拉
-    if not ctx.get("overlap") and sync_service.has_dividend_event(kline_data):
-        return "区间内出现除权除息且无重叠日可比对"
-
+        return f'前复权价格变化（{drift}）'
     return None
 
 
-def _run_save_worker(save_queue: queue.Queue, batch_save_size: int):
+def _run_save_worker(save_queue: queue.Queue, batch_save_size: int, save_state: dict):
     """后台入库线程：攒批 upsert，单次事务提交。"""
     batch = []
-    while True:
-        try:
-            item = save_queue.get(timeout=1.0)
-        except queue.Empty:
-            if batch:
-                _flush_save_batch(batch)
-                batch = []
-            if is_cancelled() and save_queue.empty():
-                break
-            continue
+    try:
+        while True:
+            try:
+                item = save_queue.get(timeout=1.0)
+            except queue.Empty:
+                if batch:
+                    _flush_save_batch(batch, save_state)
+                    batch = []
+                continue
 
-        if item is None:
             save_queue.task_done()
-            break
+            if item is None:
+                break
+            batch.append(item)
+            if len(batch) >= batch_save_size:
+                _flush_save_batch(batch, save_state)
+                batch = []
 
-        batch.append(item)
-        save_queue.task_done()
-
-        if len(batch) >= batch_save_size:
-            _flush_save_batch(batch)
-            batch = []
-
-    if batch:
-        _flush_save_batch(batch)
+        if batch:
+            _flush_save_batch(batch, save_state)
+    except Exception as exc:
+        save_state['error'] = exc
 
 
-def _flush_save_batch(batch):
+def _flush_save_batch(batch, save_state):
     t0 = time.time()
     result = sync_service.save_kline_batch(batch)
+    save_state['saved_codes'].update(code for code, _ in batch)
     elapsed = time.time() - t0
     print(
         f"[INFO] Batch upserted {result['stock_count']} stocks "
@@ -207,7 +169,6 @@ def _flush_save_batch(batch):
 
 def run_sync_task(start_date: str, end_date: str, skip_check: bool = True):
     count = 0
-    success_count = 0
     resync_count = 0
     failed_stocks = []
     no_data_stocks = []
@@ -215,16 +176,18 @@ def run_sync_task(start_date: str, end_date: str, skip_check: bool = True):
     total = 0
     lock = threading.Lock()
 
+    save_state = {'saved_codes': set(), 'error': None}
+    error_msg = None
+    filtered_stocks = []
+    skipped_codes = set()
     save_queue = queue.Queue(maxsize=SAVE_QUEUE_MAXSIZE)
     saver_thread = threading.Thread(
         target=_run_save_worker,
-        args=(save_queue, BATCH_SAVE_SIZE),
+        args=(save_queue, BATCH_SAVE_SIZE, save_state),
         daemon=True,
     )
 
     try:
-        begin_sync()
-
         requested_start = start_date.replace('-', '')
         end_date_clean = end_date.replace('-', '')
 
@@ -245,7 +208,6 @@ def run_sync_task(start_date: str, end_date: str, skip_check: bool = True):
 
         print("\n[STEP 1/3] Loading stocks from database...")
         from app.services.stock_service import get_stock_list
-        from app.utils.database import SessionLocal
 
         with SessionLocal() as db_list:
             all_stocks, _ = get_stock_list(db_list, skip=0, limit=10000)
@@ -271,28 +233,28 @@ def run_sync_task(start_date: str, end_date: str, skip_check: bool = True):
         skipped_codes = load_skipped_codes()
         print(f"[INFO] Loaded {len(skipped_codes)} stocks from skip list")
 
-        print("\n[STEP 1.5/3] Pre-loading indicator context and QFQ baseline...")
-        context_start_obj = fetch_start_obj - timedelta(days=INDICATOR_CONTEXT_DAYS)
-        fetch_end_obj = datetime.strptime(end_date_clean, "%Y%m%d").date()
-        filtered_codes = [s.code for s in filtered_stocks]
-
-        with SessionLocal() as db_cache:
-            sync_context = _load_sync_context(
-                db_cache, filtered_codes, context_start_obj, fetch_start_obj, fetch_end_obj
-            )
-
-        print(f"[INFO] Pre-loaded context for {len(sync_context)} stocks", flush=True)
-
         print("\n[STEP 2/3] Syncing K-line data (pipeline: fetch + async save)...", flush=True)
         saver_thread.start()
 
         def fetch_and_enqueue(stock):
+            if is_cancelled() or save_state['error'] is not None:
+                return {'status': 'cancelled'}
             result = _process_single_stock(
-                stock, start_date_clean, end_date_clean, skipped_codes, sync_context, skip_check
+                stock, start_date_clean, end_date_clean, skipped_codes, skip_check
             )
             if result["status"] == "success":
-                # 队列满时阻塞，自然降低 API 请求速率
-                save_queue.put((result["stock_code"], result["kline_data"]))
+                while True:
+                    if save_state['error'] is not None:
+                        raise RuntimeError(f"K线写入失败：{save_state['error']}")
+                    if is_cancelled():
+                        result['status'] = 'cancelled'
+                        break
+                    try:
+                        save_queue.put((result["stock_code"], result["kline_data"]), timeout=0.2)
+                        break
+                    except queue.Full:
+                        continue
+            result.pop('kline_data', None)
             return result
 
         with ThreadPoolExecutor(max_workers=FETCH_WORKERS) as executor:
@@ -302,6 +264,10 @@ def run_sync_task(start_date: str, end_date: str, skip_check: bool = True):
             }
 
             for future in as_completed(future_to_stock):
+                if save_state['error'] is not None:
+                    for f in future_to_stock:
+                        f.cancel()
+                    raise RuntimeError(f"K线写入失败：{save_state['error']}")
                 if is_cancelled():
                     print("\n[WARN] Sync cancelled by user")
                     for f in future_to_stock:
@@ -319,13 +285,12 @@ def run_sync_task(start_date: str, end_date: str, skip_check: bool = True):
                         count += 1
 
                         if result["status"] == "success":
-                            success_count += 1
                             if result.get("full_resync"):
                                 resync_count += 1
                             tag = " [FULL-RESYNC]" if result.get("full_resync") else ""
                             print(
                                 f"[OK] [{count}/{total}] {stock_code} {stock_name} "
-                                f"fetched {len(result['kline_data'])} records{tag}"
+                                f"fetched{tag}"
                             )
                         elif result["status"] == "skipped":
                             skipped_count += 1
@@ -334,11 +299,11 @@ def run_sync_task(start_date: str, end_date: str, skip_check: bool = True):
                             no_data_stocks.append({"code": stock_code, "name": stock_name})
                             print(f"[WARN] [{count}/{total}] {stock_code} {stock_name} no data available")
                         elif result["status"] == "failed":
-                            failed_stocks.append({"code": stock_code, "name": stock_name})
+                            failed_stocks.append({"code": stock_code, "name": stock_name, "reason": result["reason"]})
                             print(f"[ERROR] [{count}/{total}] Failed to sync {stock_code}: {result['reason']}")
 
                         progress = 20 + int((count / total) * 70) if total else 100
-                        update_counts(success_count, skipped_count, failed_stocks, no_data_stocks, progress)
+                        update_counts(len(save_state['saved_codes']), skipped_count, failed_stocks, no_data_stocks, progress)
 
                 except Exception as e:
                     with lock:
@@ -346,43 +311,49 @@ def run_sync_task(start_date: str, end_date: str, skip_check: bool = True):
                         failed_stocks.append({"code": stock_code, "name": stock_name})
                         print(f"[ERROR] [{count}/{total}] Failed to process {stock_code}: {e}")
                         progress = 20 + int((count / total) * 70) if total else 100
-                        update_counts(success_count, skipped_count, failed_stocks, no_data_stocks, progress)
+                        update_counts(len(save_state['saved_codes']), skipped_count, failed_stocks, no_data_stocks, progress)
 
-        save_queue.put(None)
-        saver_thread.join(timeout=300)
-
-        print("\n[STEP 3/3] Saving sync record...")
-        sync_service.create_sync_record(
-            end_date, total, success_count, skipped_count,
-            len(failed_stocks), len(no_data_stocks), failed_stocks, no_data_stocks,
+    except Exception as exc:
+        error_msg = str(exc)
+        print(f"[FATAL ERROR] Sync failed: {exc}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        # 生产者全部退出后才发送结束标记，取消时也要写完已入队的数据。
+        while saver_thread.is_alive():
+            try:
+                save_queue.put(None, timeout=0.2)
+                break
+            except queue.Full:
+                continue
+        if saver_thread.ident is not None:
+            saver_thread.join()
+        if save_state['error'] is not None:
+            error_msg = f"K线写入失败：{save_state['error']}"
+        success_count = len(save_state['saved_codes'])
+        if error_msg:
+            failed_codes = {s['code'] for s in failed_stocks}
+            no_data_codes = {s['code'] for s in no_data_stocks}
+            for stock in filtered_stocks:
+                if stock.code not in save_state['saved_codes'] | failed_codes | no_data_codes:
+                    if skip_check and stock.code in skipped_codes:
+                        continue
+                    failed_stocks.append({'code': stock.code, 'name': stock.name})
+        update_counts(success_count, skipped_count, failed_stocks, no_data_stocks, sync_status['progress'])
+        status = 'failed' if error_msg else (
+            'cancelled' if is_cancelled() else ('partial' if failed_stocks else 'success')
         )
-
-        print("=" * 50)
-        print("[DONE] Sync completed!")
-        print(f"  Total: {total}")
-        print(f"  Success: {success_count}")
-        print(f"  Full resync (除权除息): {resync_count}")
-        print(f"  Skipped: {skipped_count}")
-        print(f"  Failed: {len(failed_stocks)}")
-        print(f"  No data: {len(no_data_stocks)}")
-        print("=" * 50)
-
-    except Exception as e:
-        if is_cancelled():
-            print("\n[WARN] Sync task cancelled")
+        try:
             sync_service.create_sync_record(
                 end_date, total, success_count, skipped_count,
                 len(failed_stocks), len(no_data_stocks), failed_stocks, no_data_stocks,
+                status=status, error_msg=error_msg,
             )
-        else:
-            print(f"[FATAL ERROR] Sync failed: {e}")
-            import traceback
-            traceback.print_exc()
-    finally:
-        if saver_thread.is_alive():
-            save_queue.put(None)
-            saver_thread.join(timeout=60)
-        end_sync()
+        except Exception as exc:
+            error_msg = error_msg or f"保存同步记录失败：{exc}"
+        finally:
+            end_sync(error_msg)
+        print(f"[DONE] Sync {sync_status['status']}: saved={success_count}, failed={len(failed_stocks)}, resynced={resync_count}")
 
 
 def cancel_sync():
@@ -395,6 +366,8 @@ async def get_sync_progress():
     return success(data={
         "is_syncing": sync_status["is_syncing"],
         "progress": sync_status["progress"],
+        "status": sync_status["status"],
+        "error_msg": sync_status["error_msg"],
         "success_count": sync_status.get("success_count", 0),
         "failed_count": sync_status.get("failed_count", 0),
         "skipped_count": sync_status.get("skipped_count", 0),
@@ -405,7 +378,7 @@ async def get_sync_progress():
 
 
 @router.get("/history")
-async def get_sync_history(db: Session = Depends(get_db)):
+def get_sync_history(db: Session = Depends(get_db)):
     db_status = sync_service.get_sync_status()
     total_stocks_with_kline = stock_service.get_total_stocks_with_kline(db)
     return success(data={
@@ -419,14 +392,21 @@ async def start_sync(
     request: SyncRequest,
     background_tasks: BackgroundTasks
 ):
-    if sync_status["is_syncing"]:
+    try:
+        start = datetime.strptime(request.start_date.replace('-', ''), '%Y%m%d').date()
+        end = datetime.strptime(request.end_date.replace('-', ''), '%Y%m%d').date()
+    except ValueError:
+        return error(code=1, msg="日期格式应为 YYYY-MM-DD 或 YYYYMMDD")
+    if start > end:
+        return error(code=1, msg="起始日期不能晚于结束日期")
+    end = min(end, sync_service.latest_completed_date())
+    if start > end:
+        return error(code=1, msg="所选区间尚无已收盘日线，请在收盘后同步")
+    if not begin_sync():
         return error(code=1, msg="已有同步任务在进行中")
 
-    if not request.start_date or not request.end_date:
-        return error(code=1, msg="起始时间和结束时间不能为空")
-
-    background_tasks.add_task(run_sync_task, request.start_date, request.end_date, True)
-    return success(msg="同步任务已启动")
+    background_tasks.add_task(run_sync_task, start.isoformat(), end.isoformat(), True)
+    return success(msg=f"同步任务已启动（日线截至 {end.isoformat()}）")
 
 
 class SyncRecentDaysRequest(BaseModel):
@@ -439,12 +419,11 @@ async def start_sync_recent_days(
     background_tasks: BackgroundTasks
 ):
     """同步近N天数据，跳过排除列表，有则更新无则插入"""
-    if sync_status["is_syncing"]:
+    if not begin_sync():
         return error(code=1, msg="已有同步任务在进行中")
 
-    today = datetime.now().date()
-    end_date = today
-    start_date = today - timedelta(days=request.days + 5)
+    end_date = sync_service.latest_completed_date()
+    start_date = end_date - timedelta(days=request.days - 1)
 
     start_date_str = start_date.strftime('%Y%m%d')
     end_date_str = end_date.strftime('%Y%m%d')
@@ -458,7 +437,7 @@ async def sync_basic_info(
     background_tasks: BackgroundTasks
 ):
     """只同步股票基本信息（市值、市盈率等），不同步K线"""
-    if sync_status["is_syncing"]:
+    if not begin_sync():
         return error(code=1, msg="已有同步任务在进行中")
 
     background_tasks.add_task(sync_service.run_basic_info_sync)
@@ -520,7 +499,7 @@ async def repair_indicators(
     background_tasks: BackgroundTasks
 ):
     """修复所有股票的K线指标数据"""
-    if sync_status["is_syncing"]:
+    if not begin_sync():
         return error(code=1, msg="已有同步任务在进行中")
 
     background_tasks.add_task(sync_service.run_repair_indicators)

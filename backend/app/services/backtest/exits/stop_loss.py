@@ -17,7 +17,6 @@ class StopLossExit(BaseExitRule):
         display_name='止损',
         description='收盘价相对成本价跌幅达到阈值即卖出',
         priority=10,
-        same_day_exec=True,
         params=[ParamSpec('loss_pct', '亏损达', 8.0, '% 止损',
                           param_type='float', minimum=0.5, maximum=50, step=0.5)],
     )

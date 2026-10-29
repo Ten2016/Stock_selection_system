@@ -103,6 +103,12 @@ def repair_one_stock(conn, stock_code, stock_name, total_cap):
         if df is None or len(df) == 0:
             print(f"  ⚠️  API无数据返回")
             return False
+        stored_dates = {row[0] for row in cursor.execute(
+            'SELECT trade_date FROM stock_kline WHERE stock_code=?', (stock_code,)
+        )}
+        missing_dates = stored_dates - {str(day) for day in df['trade_date']}
+        if missing_dates:
+            raise ValueError(f'上游缺少 {len(missing_dates)} 个已存交易日，未覆盖本地数据')
         
         rows = _df_to_rows(stock_code, df)
         
@@ -113,6 +119,7 @@ def repair_one_stock(conn, stock_code, stock_name, total_cap):
         return True
         
     except Exception as e:
+        conn.rollback()
         print(f"  ✗ 失败: {e}")
         import traceback
         traceback.print_exc()

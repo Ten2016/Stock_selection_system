@@ -5,6 +5,7 @@
 """
 
 from dataclasses import dataclass, field
+import math
 from typing import Any, Dict, List, Optional
 
 
@@ -27,7 +28,9 @@ class ParamSpec:
             return self.default
         try:
             value = int(raw) if self.param_type == 'int' else float(raw)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
+            return self.default
+        if self.param_type == 'float' and not math.isfinite(value):
             return self.default
         if self.minimum is not None:
             value = max(value, self.minimum)
@@ -85,15 +88,18 @@ class BaseStrategy:
     def check(self, klines: List, **params) -> Optional[dict]:
         raise NotImplementedError
 
+    def required_klines(self, **params) -> int:
+        return self.min_klines
+
     def find_signals(self, klines: List, start_year: int, **params) -> List[dict]:
         """默认回测：从 start_year 起逐日重放 check()，同一天只记一个信号。"""
         signals = []
         prev_date = None
 
         start_idx = next(
-            (i for i, bar in enumerate(klines) if bar.trade_date.year >= start_year), 0
+            (i for i, bar in enumerate(klines) if bar.trade_date.year >= start_year), len(klines)
         )
-        start_idx = max(start_idx, self.min_klines)
+        start_idx = max(start_idx, self.required_klines(**params) - 1)
 
         for i in range(start_idx, len(klines)):
             result = self.check(klines[:i + 1], **params)

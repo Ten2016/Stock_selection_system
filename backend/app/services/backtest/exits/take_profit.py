@@ -12,7 +12,6 @@ class TakeProfitExit(BaseExitRule):
         display_name='止盈',
         description='收盘价相对成本价涨幅达到阈值即卖出',
         priority=30,
-        same_day_exec=True,
         params=[ParamSpec('profit_pct', '盈利达', 15.0, '% 止盈',
                           param_type='float', minimum=0.5, maximum=200, step=0.5)],
     )

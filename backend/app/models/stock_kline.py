@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Date, TIMESTAMP, DECIMAL, Index, UniqueConstraint
+from sqlalchemy import Column, Integer, String, Date, TIMESTAMP, DECIMAL, UniqueConstraint
 from sqlalchemy.sql import func
 
 from app.utils.database import Base
@@ -9,12 +9,11 @@ class StockKline(Base):
     __tablename__ = "stock_kline"
     __table_args__ = (
         UniqueConstraint('stock_code', 'trade_date', name='uq_stock_kline_code_date'),
-        Index('idx_stock_code_trade_date', 'stock_code', 'trade_date'),
     )
 
-    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    stock_code = Column(String(10), nullable=False, index=True)
-    trade_date = Column(Date, nullable=False)
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    stock_code = Column(String(10), nullable=False)
+    trade_date = Column(Date, nullable=False, index=True)
     open = Column(DECIMAL(10, 2), nullable=False)
     high = Column(DECIMAL(10, 2), nullable=False)
     low = Column(DECIMAL(10, 2), nullable=False)

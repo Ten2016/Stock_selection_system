@@ -3,9 +3,6 @@
 动机：单日跌破均线噪音太大（尤其 MA5），连续多日站不回去才说明短期趋势真的走坏。
 两条腿是 OR 关系——MA5 反应快但需要更多天确认，MA10 更慢但两天即可确认。
 
-当日尾盘成交：MA5 = (前 4 日收盘 + 今日价) / 5，前 4 项盘中已定，
-14:55 时代入现价就能高置信度判断今日是否收在均线下方，尾盘挂单是真实可执行的。
-
 任一参数设为 0 即关闭该条腿。
 """
 
@@ -32,9 +29,8 @@ class BelowMaStreakExit(BaseExitRule):
     meta = ExitMeta(
         name='below_ma_streak',
         display_name='连续跌破均线',
-        description='连续 N 天跌破 MA5，或连续 M 天跌破 MA10（当日尾盘卖出）',
+        description='连续 N 天跌破 MA5，或连续 M 天跌破 MA10',
         priority=45,
-        same_day_exec=True,
         params=[
             ParamSpec('ma5_days', '连续', 3, '天跌破 MA5（0=关闭）', minimum=0, maximum=20),
             ParamSpec('ma10_days', '或连续', 2, '天跌破 MA10（0=关闭）', minimum=0, maximum=20),

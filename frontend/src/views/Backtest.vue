@@ -66,7 +66,7 @@
 
       <el-alert
         type="info" :closable="false" show-icon style="margin-bottom: 12px;"
-        title="组内可选「任一满足」或「全部满足」，组与组之间恒为「任一满足」。同一天多条触发时按优先级取第一条：止损 > 移动止损 > 止盈 > MACD红柱连降 > 连续跌破均线 > 技术反转 > 时间到期。卖出信号默认当日尾盘成交（多数技术信号在收盘前半小时已定型），可在下方切换为次日成交做对照。"
+        title="组内可选「任一满足」或「全部满足」，组与组之间恒为「任一满足」。同一天多条触发时按优先级取第一条：止损 > 移动止损 > 止盈 > MACD红柱连降 > 连续跌破均线 > 技术反转 > 时间到期。买卖信号均在次一交易日收盘成交。"
       />
 
       <div v-for="(group, gi) in exitGroups" :key="gi" class="group">
@@ -90,11 +90,6 @@
             <el-checkbox v-model="group.enabled[r.name]">
               <span class="exit-item__name">{{ r.display_name }}</span>
             </el-checkbox>
-            <el-tag
-              v-if="r.name.startsWith('macd')" size="small" type="warning"
-              effect="plain" class="exit-item__tag"
-              title="DIF/DEA 由今日收盘价递归算出，两线差值接近零时尾盘可能翻转，当日成交的置信度低于价格类规则"
-            >尾盘判定存不确定性</el-tag>
             <div class="exit-item__desc">{{ r.description }}</div>
             <div v-if="group.enabled[r.name] && r.params.length" class="exit-item__params">
               <div v-for="p in r.params" :key="p.name" class="exit-param">
@@ -130,28 +125,17 @@
           <el-input-number v-model="initialCapital" :min="10000" :step="10000" style="width: 150px;" />
           <span style="margin-left: 6px;">元</span>
         </el-form-item>
-        <el-form-item label="买入成交">
-          <el-select v-model="execution" style="width: 150px;">
-            <el-option label="信号次日开盘" value="next_open" />
-            <el-option label="信号次日收盘" value="next_close" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="卖出成交">
-          <el-select v-model="exitTiming" style="width: 170px;">
-            <el-option label="信号当日尾盘" value="same_day" />
-            <el-option label="信号次日（对照）" value="next_day" />
-          </el-select>
+        <el-form-item label="买卖成交">
+          <span>信号次一交易日收盘</span>
         </el-form-item>
         <el-form-item>
           <el-button type="primary" size="large" :loading="running" @click="run">运行回测</el-button>
         </el-form-item>
       </el-form>
       <div class="hint">
-        <strong>买入</strong>走次日成交，保持保守。
-        <strong>卖出</strong>默认当日尾盘：多数技术信号在收盘前半小时已定型，14:55 挂单是真实可执行的；
-        严格说这属于 cheat-on-close，会让回测略偏乐观，
-        切到「信号次日（对照）」跑一遍即可量化这个假设值多少收益——两者差异远小于噪声才说明策略稳健。<br />
-        成本按 A 股实际计：佣金万2.5（单笔最低 5 元）、印花税万5（仅卖出）、过户费 0.001%、滑点 0.1%。
+        买入、卖出均按信号次一交易日收盘价撮合，并计入滑点；涨跌停受阻则顺延。
+        期末未卖出持仓按收盘价估值，不强制平仓；胜率等交易指标只统计已完成交易。<br />
+        全区间统一费率：佣金万2.5（最低 5 元）、卖出印花税万5、过户费 0.001%、滑点 0.1%。
       </div>
     </el-card>
 
@@ -236,7 +220,7 @@
       v-model:visible="detailVisible"
       :stat="detailStat"
       :detail="detailData"
-      :initial-capital="initialCapital"
+      :initial-capital="result?.config.initial_capital ?? initialCapital"
     />
   </div>
 </template>
@@ -266,8 +250,6 @@ const searchKeyword = ref('')
 
 const dateRange = ref([])
 const initialCapital = ref(100000)
-const execution = ref('next_open')
-const exitTiming = ref('same_day')
 
 const running = ref(false)
 const result = ref(null)
@@ -302,7 +284,7 @@ const poolMetrics = computed(() => {
 
 const crossMetrics = computed(() => {
   const c = result.value?.summary.cross_section
-  if (!c) return []
+  if (!c?.best || !c?.worst) return []
   return [
     { label: '收益中位数', value: fmt(c.median_return_pct, '%'), tone: tone(c.median_return_pct) },
     { label: '收益均值', value: fmt(c.mean_return_pct, '%'), tone: tone(c.mean_return_pct) },
@@ -359,10 +341,17 @@ const importFromStrategy = async () => {
   try {
     const res = await getLatestStrategyResult(importStrategy.value)
     const list = res.data?.selected_stocks || []
-    if (!list.length) return ElMessage.warning('该策略还没有选股结果，请先到「选股策略」页运行一次')
+    if (!list.length) {
+      return ElMessage.warning(res.data?.run_date
+        ? '该策略最近一次选股未命中股票'
+        : '该策略还没有选股结果，请先到「选股策略」页运行一次')
+    }
     const seen = new Set(selected.value.map(s => s.code))
     for (const s of list) {
-      if (!seen.has(s.code)) selected.value.push({ code: s.code, name: s.name })
+      if (!seen.has(s.code)) {
+        selected.value.push({ code: s.code, name: s.name })
+        seen.add(s.code)
+      }
     }
     ElMessage.success(`已导入 ${list.length} 只股票`)
   } catch (e) {
@@ -394,6 +383,8 @@ const removeStock = (code) => {
 
 const run = async () => {
   if (!selected.value.length) return ElMessage.warning('请先选择股票')
+  if (selected.value.length > 100) return ElMessage.warning('单次最多回测 100 只股票，请减少股票数量')
+  if (dateRange.value?.[0] > dateRange.value?.[1]) return ElMessage.warning('起始日期不能晚于结束日期')
   const groups = exitGroups.value
     .map(g => ({
       logic: g.logic,
@@ -415,8 +406,8 @@ const run = async () => {
       end_date: dateRange.value?.[1] || null,
       config: {
         initial_capital: initialCapital.value,
-        execution: execution.value,
-        exit_timing: exitTiming.value,
+        execution: 'next_close',
+        exit_timing: 'next_day',
       },
     })
     result.value = res.data
@@ -454,10 +445,6 @@ const openDetail = (row) => {
 .group__title {
   font-weight: 600;
   color: #303133;
-}
-
-.exit-item__tag {
-  margin-left: 6px;
 }
 
 .exit-list {

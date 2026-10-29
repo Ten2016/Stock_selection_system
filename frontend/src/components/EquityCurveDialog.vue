@@ -17,6 +17,10 @@
         </div>
       </div>
 
+      <el-alert v-if="detail?.open_position" type="info" :closable="false" style="margin-bottom: 16px;">
+        期末仍持有 {{ detail.open_position.shares }} 股，按收盘价估值，未计入已完成交易。
+        <span v-if="detail.open_position.pending_exit">待卖出：{{ detail.open_position.pending_exit }}。</span>
+      </el-alert>
       <el-tabs v-model="activeTab">
         <el-tab-pane label="K线与买卖区间" name="kline">
           <div class="tab-hint">
@@ -60,7 +64,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, nextTick } from 'vue'
+import { ref, computed, watch, nextTick, onUnmounted } from 'vue'
 import { createChart, LineSeries, ColorType, LineStyle, CrosshairMode } from 'lightweight-charts'
 import KlineChartPanel from './KlineChartPanel.vue'
 
@@ -102,6 +106,8 @@ const metrics = computed(() => {
     { label: '最大连亏', value: fmt(s.max_consecutive_losses, ' 笔') },
     { label: '仓位暴露', value: fmt(s.exposure_pct, '%') },
     { label: '总费用', value: formatMoney(s.total_cost) },
+    { label: '已实现盈亏', value: formatMoney(s.realized_pnl), tone: tone(s.realized_pnl) },
+    { label: '持仓浮动盈亏', value: formatMoney(s.unrealized_pnl), tone: tone(s.unrealized_pnl) },
     { label: '期末权益', value: formatMoney(s.final_equity) },
   ]
 })
@@ -160,11 +166,13 @@ const onOpened = async () => {
 
 // 容器在 tab 激活后才有尺寸，autoSize 依赖这一点，否则高度会塌成 0
 watch(activeTab, async (tab) => {
-  if (tab !== 'equity') return
   destroyChart()
+  if (tab !== 'equity' || !props.visible) return
   await nextTick()
-  buildChart()
+  if (props.visible && activeTab.value === 'equity') buildChart()
 })
+
+onUnmounted(destroyChart)
 </script>
 
 <style scoped>

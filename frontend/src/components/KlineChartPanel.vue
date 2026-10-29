@@ -79,6 +79,23 @@ const MACD_PANE_HEIGHT = 130
 // 拉取窗口：覆盖最长预设(1年≈250交易日)并留出均线预热余量
 const FETCH_DAYS = 600
 
+const historyStart = computed(() => {
+  const start = new Date()
+  start.setDate(start.getDate() - FETCH_DAYS)
+  const recent = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}-${String(start.getDate()).padStart(2, '0')}`
+  const dates = [
+    recent,
+    ...props.backtestSignals.map(signal => signal.date),
+    ...props.trades.flatMap(trade => [trade.entry_date, trade.exit_date]),
+    props.strategyResult?.breakdown_date,
+    props.strategyResult?.rise_date,
+    props.strategyResult?.valley_date,
+    ...(props.strategyResult?.matching_dates || []),
+    ...(props.strategyResult?.falling_dates || []),
+  ].filter(Boolean)
+  return dates.sort()[0]
+})
+
 const chartRef = ref(null)
 const stockName = ref('')
 const stockBasicInfo = ref(null)
@@ -355,7 +372,7 @@ const applyMarkers = () => {
 
 const applyRange = () => {
   if (!chart || !allData.length) return
-  const days = props.trades.length ? 0 : rangeDays.value
+  const days = props.trades.length || props.backtestSignals.length ? 0 : rangeDays.value
   if (!days || days >= allData.length) {
     chart.timeScale().fitContent()
     return
@@ -417,6 +434,7 @@ const updateLegend = (row) => {
 // 数据到达与容器挂载的先后顺序不确定，两边都调用 renderIfReady，
 // 由它判断「容器已挂载 且 数据已就绪」才真正建图。
 const mounted = ref(false)
+let loadVersion = 0
 
 const renderIfReady = () => {
   if (!mounted.value || !allData.length || !chartRef.value) return
@@ -426,20 +444,22 @@ const renderIfReady = () => {
 
 const loadAll = async () => {
   const requestedCode = props.stockCode
+  const version = ++loadVersion
+  allData = []
+  stockBasicInfo.value = null
+  Object.assign(legend, emptyLegend())
   loading.value = true
   hasData.value = false
   try {
-    const start = new Date()
-    start.setDate(start.getDate() - FETCH_DAYS)
     const [infoRes, klineRes] = await Promise.all([
       api.get(`/stocks/${requestedCode}`),
       api.get(`/stocks/${requestedCode}/kline`, {
-        params: { start_date: start.toISOString().slice(0, 10) },
+        params: { start_date: historyStart.value },
       }),
     ])
 
     // 请求返回时可能已切换股票
-    if (props.stockCode !== requestedCode) return
+    if (!mounted.value || version !== loadVersion) return
 
     stockName.value = infoRes.data?.name || ''
     stockBasicInfo.value = infoRes.data || null
@@ -452,12 +472,12 @@ const loadAll = async () => {
 
     hasData.value = allData.length > 0
     await nextTick()
-    if (props.stockCode !== requestedCode) return
+    if (!mounted.value || version !== loadVersion) return
     renderIfReady()
   } catch (error) {
     console.error('加载 K 线失败:', error)
   } finally {
-    if (props.stockCode === requestedCode) loading.value = false
+    if (mounted.value && version === loadVersion) loading.value = false
   }
 }
 
@@ -485,7 +505,7 @@ onMounted(async () => {
   if (props.stockCode) loadAll()
 })
 
-watch(() => props.stockCode, (code) => {
+watch([() => props.stockCode, historyStart], ([code]) => {
   if (!code) return
   destroyChart()
   loadAll()
@@ -497,12 +517,17 @@ watch(() => [props.strategyResult, props.backtestSignals, props.trades], () => {
   if (!chart || !allData.length) return
   applyHoldingHighlight()
   applyMarkers()
+  applyRange()
 })
 
 watch(visibleOverlays, applyOverlayVisibility)
 watch(rangeDays, applyRange)
 
-onUnmounted(destroyChart)
+onUnmounted(() => {
+  mounted.value = false
+  loadVersion += 1
+  destroyChart()
+})
 </script>
 
 <style scoped>

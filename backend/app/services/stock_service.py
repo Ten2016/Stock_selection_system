@@ -73,13 +73,8 @@ def get_total_stocks_with_kline(db: Session):
     return db.query(StockKline.stock_code).distinct().count()
 
 
-def clear_all_kline_data(db: Session):
-    deleted = db.query(StockKline).delete(synchronize_session=False)
+def clear_all_stock_data(db: Session):
+    deleted_kline = db.query(StockKline).delete(synchronize_session=False)
+    deleted_basic = db.query(StockBasic).delete(synchronize_session=False)
     db.commit()
-    return deleted
-
-
-def clear_all_stock_basic(db: Session):
-    deleted = db.query(StockBasic).delete(synchronize_session=False)
-    db.commit()
-    return deleted
+    return deleted_kline, deleted_basic

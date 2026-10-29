@@ -1,5 +1,5 @@
 from datetime import timedelta
-from typing import Dict, List, Sequence
+from typing import Dict, List, Optional, Sequence
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -16,6 +16,7 @@ STRATEGY_COLUMNS = (
     StockKline.high,
     StockKline.low,
     StockKline.close,
+    StockKline.volume,
     StockKline.change_pct,
     StockKline.ma5,
     StockKline.ma10,
@@ -38,7 +39,7 @@ _CALENDAR_DAYS_PER_TRADING_DAY = 1.6
 CHUNK_SIZE = 500
 
 
-def get_sorted_klines(stock_code: str, db: Session, max_days: int = 200) -> List:
+def get_sorted_klines(stock_code: str, db: Session, max_days: Optional[int] = 200) -> List:
     data = db.query(*STRATEGY_COLUMNS).filter(
         StockKline.stock_code == stock_code
     ).order_by(StockKline.trade_date.desc()).limit(max_days).all()

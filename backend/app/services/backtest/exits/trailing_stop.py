@@ -17,7 +17,6 @@ class TrailingStopExit(BaseExitRule):
         display_name='移动止损',
         description='从持仓期最高收盘价回撤达到阈值即卖出',
         priority=20,
-        same_day_exec=True,
         params=[ParamSpec('drawdown_pct', '回撤达', 10.0, '% 卖出',
                           param_type='float', minimum=0.5, maximum=50, step=0.5)],
     )

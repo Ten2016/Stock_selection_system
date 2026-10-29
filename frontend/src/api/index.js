@@ -15,7 +15,11 @@ api.interceptors.response.use(
     return Promise.reject(new Error(msg))
   },
   error => {
-    const msg = error?.response?.data?.msg || error.message || '网络错误'
+    const data = error?.response?.data
+    const detail = Array.isArray(data?.detail)
+      ? data.detail.map(item => item.msg).join('；')
+      : data?.detail
+    const msg = data?.msg || detail || error.message || '网络错误'
     ElMessage.error(msg)
     return Promise.reject(error)
   }

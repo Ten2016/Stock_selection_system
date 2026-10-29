@@ -13,7 +13,7 @@ SQLALCHEMY_DATABASE_URL = settings.DATABASE_URL
 
 engine = create_engine(
     SQLALCHEMY_DATABASE_URL,
-    connect_args={"check_same_thread": False},
+    connect_args={"check_same_thread": False, "timeout": 30},
 )
 
 
@@ -44,6 +44,8 @@ def init_db():
     Base.metadata.create_all(bind=engine)
 
     with engine.begin() as conn:
+        from app.utils.data_migrations import ensure_kline_indexes
+        ensure_kline_indexes(conn)
         table_report = collect_table_status(conn)
 
     print("=" * 80)
@@ -55,4 +57,3 @@ def init_db():
         print(f"[STARTUP CHECK] {table}: {status}, rows={rows}")
     print("[STARTUP CHECK] completed")
     print("=" * 80)
-

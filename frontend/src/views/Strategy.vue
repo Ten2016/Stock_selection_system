@@ -62,6 +62,7 @@
           style="width: 320px;"
           clearable
           @select="onSelectStock"
+          @input="onSearchInput"
         >
           <template #default="{ item }">
             <div style="display: flex; justify-content: space-between; width: 100%;">
@@ -157,6 +158,8 @@ const loading = ref(false)
 const hasRun = ref(false)
 const results = ref([])
 const totalCount = ref(0)
+let resultVersion = 0
+let backtestVersion = 0
 
 const chartDialogVisible = ref(false)
 const selectedStockCode = ref('')
@@ -183,27 +186,32 @@ const resetParams = () => {
 // 回填上次运行时用过的参数（仅接受当前策略声明过的字段）
 const applySavedParams = (saved) => {
   if (!saved) return
-  if (saved.min_market_cap != null) minMarketCap.value = saved.min_market_cap
+  if (saved.min_market_cap !== undefined) minMarketCap.value = saved.min_market_cap
   for (const p of currentParams.value) {
     if (saved[p.name] !== undefined) paramValues[p.name] = saved[p.name]
   }
 }
 
 const loadLatestResult = async () => {
+  const version = ++resultVersion
+  loading.value = true
   resetParams()
   results.value = []
   totalCount.value = 0
   hasRun.value = false
   try {
     const res = await getLatestStrategyResult(strategyName.value)
-    if (res.data?.selected_stocks?.length > 0) {
-      results.value = res.data.selected_stocks
+    if (version !== resultVersion) return
+    if (res.data?.run_date) {
+      results.value = res.data.selected_stocks || []
       totalCount.value = res.data.total_count || 0
       hasRun.value = true
       applySavedParams(res.data.params)
     }
   } catch (error) {
     console.error('加载最新结果失败:', error)
+  } finally {
+    if (version === resultVersion) loading.value = false
   }
 }
 
@@ -221,6 +229,8 @@ onMounted(async () => {
 })
 
 const onStrategyChange = () => {
+  backtestVersion += 1
+  backtestLoading.value = false
   backtestResult.value = null
   backtestSignals.value = []
   loadLatestResult()
@@ -228,21 +238,23 @@ const onStrategyChange = () => {
 
 const runStrategy = async () => {
   if (!strategyName.value) return ElMessage.warning('请选择策略')
+  const version = ++resultVersion
   loading.value = true
-  hasRun.value = true
   try {
     const res = await selectStocks({
       strategyName: strategyName.value,
       minMarketCap: minMarketCap.value,
       params: paramValues,
     })
+    if (version !== resultVersion) return
+    hasRun.value = true
     results.value = res.data.selected_stocks || []
     totalCount.value = res.data.total_count || 0
     ElMessage.success(`筛选完成，命中 ${totalCount.value} 只`)
   } catch (error) {
     console.error(error)
   } finally {
-    loading.value = false
+    if (version === resultVersion) loading.value = false
   }
 }
 
@@ -265,7 +277,16 @@ const handleSearch = (queryString, callback) => {
     .catch(() => callback([]))
 }
 
+const onSearchInput = () => {
+  backtestVersion += 1
+  selectedBacktestStock.value = null
+  backtestResult.value = null
+  backtestSignals.value = []
+  backtestLoading.value = false
+}
+
 const onSelectStock = (item) => {
+  onSearchInput()
   selectedBacktestStock.value = item
 }
 
@@ -273,6 +294,7 @@ const runBacktest = async () => {
   if (!selectedBacktestStock.value) return ElMessage.warning('请先选择股票')
   if (!strategyName.value) return ElMessage.warning('请先选择策略')
 
+  const version = ++backtestVersion
   backtestLoading.value = true
   backtestResult.value = null
   try {
@@ -282,18 +304,20 @@ const runBacktest = async () => {
       startYear: startYear.value,
       params: paramValues,
     })
+    if (version !== backtestVersion) return
     backtestResult.value = res.data
     backtestSignals.value = res.data?.signals || []
   } catch (error) {
     console.error('回测失败:', error)
   } finally {
-    backtestLoading.value = false
+    if (version === backtestVersion) backtestLoading.value = false
   }
 }
 
 const viewBacktestChart = () => {
-  if (!selectedBacktestStock.value) return
-  selectedStockCode.value = selectedBacktestStock.value.code
+  if (!backtestResult.value) return
+  selectedStockCode.value = backtestResult.value.stock_code
+  backtestSignals.value = backtestResult.value.signals || []
   selectedStockResult.value = null
   chartDialogVisible.value = true
 }

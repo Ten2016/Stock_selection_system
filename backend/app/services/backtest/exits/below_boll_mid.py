@@ -11,7 +11,6 @@ class BelowBollMidExit(BaseExitRule):
         display_name='跌破布林中轨',
         description='收盘价跌破布林带中轨即卖出',
         priority=50,
-        same_day_exec=True,
         params=[],
     )
 

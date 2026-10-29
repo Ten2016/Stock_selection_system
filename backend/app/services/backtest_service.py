@@ -34,13 +34,20 @@ def get_exit_rules() -> List[dict]:
     return [r.meta.to_dict() for r in all_exit_rules()]
 
 
-def _load_bars(db: Session, code: str, start: Optional[date], end: Optional[date]) -> List:
+def _load_bars(
+    db: Session, code: str, start: Optional[date], end: Optional[date],
+    warmup: int = WARMUP_BARS,
+) -> List:
     query = db.query(*STRATEGY_COLUMNS).filter(StockKline.stock_code == code)
+    history = []
     if start is not None:
+        history = query.filter(StockKline.trade_date < start).order_by(
+            StockKline.trade_date.desc()
+        ).limit(warmup).all()[::-1]
         query = query.filter(StockKline.trade_date >= start)
     if end is not None:
         query = query.filter(StockKline.trade_date <= end)
-    return query.order_by(StockKline.trade_date.asc()).all()
+    return history + query.order_by(StockKline.trade_date.asc()).all()
 
 
 def _resolve_exit_groups(specs: List[dict]) -> List[ExitGroup]:
@@ -56,7 +63,7 @@ def _resolve_exit_groups(specs: List[dict]) -> List[ExitGroup]:
         for item in spec.get('rules') or []:
             rule = get_exit_rule(item.get('name', ''))
             if rule is None:
-                continue
+                raise ValueError(f"未知的卖出规则：{item.get('name', '')}")
             rules.append((rule, rule.coerce_params(item.get('params') or {})))
         if not rules:
             continue
@@ -79,8 +86,8 @@ def _build_config(raw: Optional[dict]) -> BacktestConfig:
     )
     return BacktestConfig(
         initial_capital=float(raw.get('initial_capital', 100_000)),
-        execution=raw.get('execution', 'next_open'),
-        exit_timing=raw.get('exit_timing', 'same_day'),
+        execution=raw.get('execution', 'next_close'),
+        exit_timing=raw.get('exit_timing', 'next_day'),
         check_price_limit=bool(raw.get('check_price_limit', True)),
         cost=cost,
     )
@@ -101,13 +108,21 @@ def run(
     if entry is None:
         return {'error': f'未知的买入条件：{entry_name}'}
 
-    groups = _resolve_exit_groups(exit_groups or [])
+    if start_date and end_date and start_date > end_date:
+        return {'error': '起始日期不能晚于结束日期'}
+    codes = list(dict.fromkeys(stock_codes))
+    if len(codes) > MAX_BACKTEST_STOCKS:
+        return {'error': f'单次最多回测 {MAX_BACKTEST_STOCKS} 只股票'}
+    try:
+        groups = _resolve_exit_groups(exit_groups or [])
+    except ValueError as exc:
+        return {'error': str(exc)}
     if not groups:
         return {'error': '至少需要选择一个卖出规则'}
 
     entry_params = entry.coerce_params(entry_params or {})
+    warmup = max(WARMUP_BARS, entry.required_klines(**entry_params) - 1)
     config = _build_config(config_raw)
-    codes = stock_codes[:MAX_BACKTEST_STOCKS]
 
     names = {
         s.code: s.name
@@ -121,10 +136,20 @@ def run(
     skipped: List[dict] = []
 
     for code in codes:
-        bars = _load_bars(db, code, start_date, end_date)
-        if len(bars) < WARMUP_BARS + 20:
+        bars = _load_bars(db, code, start_date, end_date, warmup=warmup)
+        history_count = sum(bar.trade_date < start_date for bar in bars) if start_date else min(warmup, len(bars))
+        if history_count < warmup:
             skipped.append({'code': code, 'name': names.get(code, ''),
-                            'reason': f'K线不足（{len(bars)} 根，至少需 {WARMUP_BARS + 20} 根）'})
+                            'reason': f'预热K线不足（{history_count} 根，至少需 {warmup} 根）'})
+            continue
+        period_count = len(bars) - history_count
+        if period_count < 20:
+            skipped.append({'code': code, 'name': names.get(code, ''),
+                            'reason': f'回测区间K线不足（{period_count} 根，至少需 20 根）'})
+            continue
+        if any(bar.close is None or bar.close <= 0 for bar in bars[history_count:]):
+            skipped.append({'code': code, 'name': names.get(code, ''),
+                            'reason': '回测区间存在缺失或非正的前复权收盘价，无法进行资金回测'})
             continue
 
         # 买点由策略自己的 find_signals 产出，其内部已保证无未来函数
@@ -136,17 +161,22 @@ def run(
 
         signal_dates = {s['date'] for s in signals}
 
-        result = run_backtest(
-            stock_code=code, stock_name=names.get(code, ''), bars=bars,
-            entry_signal_dates=signal_dates, exit_groups=groups,
-            config=config, warmup=WARMUP_BARS,
-        )
+        try:
+            result = run_backtest(
+                stock_code=code, stock_name=names.get(code, ''), bars=bars,
+                entry_signal_dates=signal_dates, exit_groups=groups,
+                config=config, warmup=history_count,
+            )
+        except Exception as exc:
+            skipped.append({'code': code, 'name': names.get(code, ''), 'reason': f'回测计算失败：{exc}'})
+            continue
 
         stats = summarize(result, config.initial_capital)
         per_stock.append(stats)
         all_trades.extend(result.trades)
         details[code] = {
             'trades': [t.to_dict() for t in result.trades],
+            'open_position': result.open_position,
             'equity_curve': [
                 {'date': d.isoformat(), 'equity': round(v, 2)}
                 for d, v in result.equity_curve
@@ -171,7 +201,9 @@ def run(
             'commission_rate': config.cost.commission_rate,
             'min_commission': config.cost.min_commission,
             'stamp_tax_rate': config.cost.stamp_tax_rate,
+            'transfer_fee_rate': config.cost.transfer_fee_rate,
             'slippage_rate': config.cost.slippage_rate,
+            'check_price_limit': config.check_price_limit,
         },
         'per_stock': per_stock,
         'summary': aggregate(per_stock, all_trades),

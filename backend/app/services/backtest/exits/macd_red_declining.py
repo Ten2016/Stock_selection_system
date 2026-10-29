@@ -23,7 +23,6 @@ class MacdRedDecliningExit(BaseExitRule):
         display_name='MACD红柱连降',
         description='MACD 红柱见顶后，连续下降第 N 天卖出',
         priority=40,
-        same_day_exec=True,
         params=[ParamSpec('decline_days', '连续下降', 3, '天后卖出', minimum=1, maximum=10)],
     )
 

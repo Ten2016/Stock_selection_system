@@ -67,6 +67,7 @@ def trade_stats(trades: List) -> dict:
         return {
             'trade_count': 0, 'win_rate': None, 'avg_win': None, 'avg_loss': None,
             'payoff_ratio': None, 'profit_factor': None, 'expectancy': None,
+            'expectancy_pct': None, 'sample_warning': True,
             'best_trade_pct': None, 'worst_trade_pct': None,
             'avg_hold_bars': None, 'max_consecutive_losses': 0, 'sqn': None,
             'total_pnl': 0.0, 'total_cost': 0.0,
@@ -128,6 +129,9 @@ def summarize(result, initial_capital: float) -> dict:
     exposure = result.exposure_bars / result.total_bars * 100 if result.total_bars else 0.0
 
     stats = trade_stats(result.trades)
+    open_position = result.open_position or {}
+    unrealized_pnl = open_position.get('unrealized_pnl', 0.0)
+    total_cost = stats['total_cost'] + open_position.get('entry_fee', 0.0)
     benchmark = result.benchmark_return_pct
 
     return {
@@ -147,6 +151,11 @@ def summarize(result, initial_capital: float) -> dict:
         'final_equity': round(final, 2),
         'bars': n_bars,
         **stats,
+        'realized_pnl': stats['total_pnl'],
+        'unrealized_pnl': round(unrealized_pnl, 2),
+        'total_pnl': round(final - initial_capital, 2),
+        'total_cost': round(total_cost, 2),
+        'has_open_position': bool(open_position),
     }
 
 

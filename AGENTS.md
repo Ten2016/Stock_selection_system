@@ -1,70 +1,48 @@
-# A 股选股分析平台 — 项目规则
+# Repository Guidelines
 
-> 详细上下文见 [`docs/PROJECT_CONTEXT.md`](docs/PROJECT_CONTEXT.md)，本文件只列开发时最容易踩坑的约束。
+## 项目结构
 
-## 项目信息
-- **项目名称**：A 股选股分析平台
-- **部署模式**：单机单用户（无认证、无分布式）
-- **项目定位**：面向个人投资者的 A 股数据同步与技术分析平台
-- **平台**：代码本身平台无关；仅 `Makefile` 是 Windows 专用（`python.exe` / `npm.cmd`）
+本项目是基于 FastAPI、SQLite 与 Vue 3 的 A 股选股分析平台。详细架构见 `docs/PROJECT_CONTEXT.md`。
 
-## 技术栈
-- 前端：Vue 3 + Element Plus + lightweight-charts + Axios + Vite
-- 后端：FastAPI + SQLAlchemy + Pandas + Uvicorn
-- 数据库：SQLite（`backend/data/stock.db`）
-- 数据源：腾讯财经 API（前复权 qfq）
+- `backend/app/api/`：路由；`services/`：同步、指标、选股与回测；`models/`：ORM；`utils/`：数据库、限流等公共能力。
+- `backend/app/services/strategies/`：选股插件；`backtest/exits/`：回测出场规则。
+- `backend/tests/`：测试；`backend/scripts/`：数据修复；`backend/tools/`：诊断工具。
+- `frontend/src/views/`：页面；`components/`：共享组件；`api/`：接口封装；`router/`：路由。样式主要随 Vue 组件维护。
 
-## 核心功能
-1. **K 线同步**：拉取前复权 K 线，线程池拉取 + 独立线程攒批 upsert
-2. **技术指标**：MA5/10/20/30/60、布林带、MACD（DIF/DEA/MACD 柱，4 位小数，EMA 计算）
-3. **K 线图**：lightweight-charts 单 chart 双 pane（主图 K 线+均线+布林带，副图 MACD），时间轴与十字光标原生联动
-4. **选股与回测**：4 套买入条件 × 9 条卖出规则（支持 AND/OR 组合），全市场筛选、单股回测与批量聚合
-5. **股票管理**：列表搜索/排序、跳过列表、数据清理
+## 安装、开发与构建
 
-## 关键约束
+以下命令供开发者手动执行，前后端分别启动终端：
 
-1. **统一响应**：`{ code, msg, data }`，code=0 成功。后端用 `success()` / `error()`；前端拦截器已在 `code !== 0` 时 reject，**业务代码不要再判 `res.code === 0`**。
-2. **API 前缀**：`/api/v1`
-3. **市值单位一律亿元**：`stock_basic.total_cap` 存亿元，所有市值筛选入参也是亿元，**两边都不要做单位换算**。
-4. **空值判断必须用 `is not None` / `!= null`**：MACD、DIF、DEA、`change_pct`、`ytd_change_pct` 的 `0` 是合法值，用真值判断会把 0 变成 null，图上直接断线。
-5. **同步状态在内存**：`backend/app/utils/sync_state.py` 的 `sync_status`，后端必须单进程。
-6. **腾讯 K 线接口最多返回 `count` 条，超出时从 `end` 往回截断**（早期数据静默丢失，
-   且不报错）。拉长区间必须用 `_fetch_kline_paged()` 自 end 向前翻页，
-   **不要改回按固定日历窗口切页**；`KLINE_PAGE_SIZE=500` 也不要调大（实测 1000/2000 只回 640，3000+ 回空）。
-7. **K 线必须前复权**：除权除息后腾讯会用新因子重算全部历史价，库里旧数据整体失效。
-   同步只前推 `SYNC_BUFFER_DAYS`(10 天) 保证有重叠日，再逐日比对收盘价识别漂移，
-   **只对真正除权的股票**做全量重拉（`sync.py::_need_full_resync`）。不要改回无差别前推一年。
-8. **指标预加载**：在上述缓冲之外再预加载 120 天 close 作为计算上下文（不写库），确保 MA60/MACD 首日即正确。
-9. **策略参数由 `ParamSpec` 单一定义**：后端校验、接口元数据、前端表单三者都从它生成。
-   不要在 API 层或前端另写一份参数列表。
-10. **策略只能读 `STRATEGY_COLUMNS` 里的列**：`services/strategies/common.py` 按列 SELECT，策略拿到的是 Row 不是 ORM 实体。用新字段前先把列加进去。
-11. **图表实例不能放进 `ref()`/`reactive()`**：Vue 的 Proxy 会破坏 lightweight-charts 内部实例判等，`seriesData.get(series)` 会取不到值。用普通 `let`。
-12. **回测禁止未来函数**，四道闸不可破：① 规则只拿 `bars[:i+1]`；② 信号次日成交
-    （当日收盘价成交 = cheat-on-close 作弊）；③ 出场只用 close 判定，不用 high/low
-    猜 bar 内路径；④ 一字涨停不可买、一字跌停不可卖。
-    **新增买入条件或卖出规则后必须跑截断测试**（`bars[:N]` 与 `bars[:N+80]` 的历史交易须逐字一致）。
-    第 ② 条对**卖出**开了例外：默认当日尾盘成交（多数技术信号收盘前半小时已定型）。
-    这属于 cheat-on-close，会让回测偏乐观，故提供 `exit_timing=next_day` 全局对照开关，
-    评估策略时**必须两种时点各跑一遍**——差异远小于噪声才说明收益不是来自这个假设。
-    买入仍走次日，不要改。
-13. **稀疏持仓不报 Sharpe/Sortino/Beta**：空仓期会把这些指标压成仓位暴露的副产品，
-    与策略优劣无关。批量聚合也不做跨股 Sharpe/回撤平均（无可解释含义），
-    改用交易池合并 + 截面中位数。
-14. **单用户约束**：不引入分布式方案，不做多租户。
+| 工作目录 | 命令 | 用途 |
+| --- | --- | --- |
+| `backend/` | `pip install -r requirements.txt` | 安装后端依赖 |
+| `backend/` | `python run.py` | 启动后端，默认端口 8001 |
+| `frontend/` | `npm install` | 安装前端依赖 |
+| `frontend/` | `npm run dev` | 启动 Vite，默认端口 5173 |
+| `frontend/` | `npm run build` | 生成生产资源，仅由用户执行 |
+| `frontend/` | `npm run preview` | 预览已有构建产物 |
 
-## 核心数据表
-- **stock_basic**：股票基本信息（代码、名称、市值(亿元)、PE、PB）
-- **stock_kline**：K 线数据（OHLC、成交量、均线、布林带、MACD），`stock_code + trade_date` 联合唯一
-- **sync_record**：同步记录
-- **strategy_result**：选股运行结果（只保留每个策略最新一次）
+按本机环境选择 `python` 或 `python3`。根目录 `make bk`、`make fe` 使用 Windows 可执行文件名；其他平台使用上述命令。Vite 将 `/api` 代理至后端。
 
-## 开发原则
-- 新增 API：`app/api/` 加路由 → `app/services/` 加业务 → `main.py` 注册
-- 新增指标：`indicator_service` 计算 → `stock_kline` 加字段 → `sync_service` UPSERT → 补算脚本 → `to_dict()` 的 `_FLOAT_FIELDS`
-- 新增卖出规则：**只需在 `services/backtest/exits/` 新建一个文件**，继承 `BaseExitRule`、
-  定义 `meta`/`should_exit()`、末尾 `STRATEGY = XxxExit()`。注册表自动发现，前端零改动
-- 新增买入条件：**只需在 `services/strategies/` 新建一个文件**，继承 `BaseStrategy`、定义 `meta`/`check()`、
-  末尾 `STRATEGY = XxxStrategy()`。注册表自动发现，API 与前端零改动（详见 PROJECT_CONTEXT §10.4）
-- DB Session：API 层用 `Depends(get_db)`；后台任务用 `with SessionLocal() as db:`
-- 全市场遍历务必用批量查询（`load_klines_bulk`），不要逐股 SELECT
-- 所有指标与策略仅供学习研究，不构成投资建议
+## 代码风格与扩展
+
+Python 使用四空格缩进，函数与模块采用 `snake_case`，类采用 `PascalCase`。Vue、JavaScript 使用两空格缩进，组件采用 `PascalCase.vue`；沿用现有单引号、无分号风格。当前未配置统一格式化或 lint 工具，避免无关格式调整。
+
+新增选股策略复用 `BaseStrategy`、`StrategyMeta` 和 `ParamSpec`，在独立模块导出 `STRATEGY` 实例供自动发现。优先复用现有工具，仅修改任务相关代码。
+
+## 测试与验证
+
+后端使用标准库 `unittest`，文件命名为 `test_*.py`，方法以 `test_` 开头。开发者可在 `backend/` 执行 `python -m unittest discover -s tests -v`。现有腾讯接口可用性测试会访问外网，新增逻辑测试优先使用 `unittest.mock` 隔离网络。
+
+当前没有覆盖率门槛或前端自动化测试配置。策略改动应验证截断数据下的历史信号一致性；界面改动需手动检查相关页面、接口与图表交互。
+
+## 提交与合并请求
+
+历史提交以简短中文描述为主，例如“策略拆分”，未采用固定前缀规范。提交说明应明确改动对象和行为，避免笼统的“优化”。合并请求说明问题、改动范围、验证结果与未验证项；有工单时关联，界面变更附截图。
+
+## 配置与协作约束
+
+- 配置入口为 `backend/app/core/config.py`，支持 `.env`；勿提交密钥、数据库或生成产物。
+- SQLite 默认位于 `backend/data/stock.db`；修复数据前备份。后端保持单进程，同步状态存于内存；市值字段与筛选参数统一使用亿元。
+- AI 助手修改后仅做静态检查，不运行编译、构建或启动服务，并列出用户需验证的重点。
+- Git 默认只读；未经明确要求，不执行提交、切换分支、拉取等改变仓库状态的操作。

@@ -19,6 +19,24 @@ class TestRateLimiter(unittest.TestCase):
 
 class TestTencentFinanceAPI(unittest.TestCase):
 
+    @patch('app.services.sync_service.time.sleep')
+    @patch('app.services.sync_service.requests.get')
+    def test_quote_fields_match_dynamic_static_pe_and_year_change(self, mock_get, sleep):
+        fields = [''] * 90
+        for index, value in {0: '1', 1: '示例股票', 2: '600000', 3: '10',
+                             32: '1.5', 39: '6.3', 44: '80.25', 45: '100.75',
+                             46: '--', 52: '5.2', 53: '6.5', 62: '-18.7'}.items():
+            fields[index] = value
+        mock_get.return_value.text = 'v_sh600000="' + '~'.join(fields) + '";'
+        df = sync_service.fetch_all_stocks_basic_info()
+        row = df.iloc[0]
+        self.assertEqual(row['总市值'], 100.75)
+        self.assertEqual(row['流通市值'], 80.25)
+        self.assertEqual(row['市盈率'], 5.2)
+        self.assertEqual(row['静态市盈率'], 6.5)
+        self.assertEqual(row['今年涨跌幅'], -18.7)
+        self.assertTrue(pd.isna(row['市净率']))
+
     def test_delay_constants_exist(self):
         self.assertTrue(hasattr(sync_service, 'REQUEST_DELAY_MIN'))
         self.assertTrue(hasattr(sync_service, 'REQUEST_DELAY_MAX'))

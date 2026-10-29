@@ -6,6 +6,7 @@
 
 import importlib
 import pkgutil
+from threading import Lock
 from typing import Dict, List, Optional
 
 from .base import BaseStrategy, ParamSpec, StrategyMeta, tag
@@ -15,20 +16,26 @@ _INFRA_MODULES = {'base', 'common'}
 
 _registry: Dict[str, BaseStrategy] = {}
 
+_discovery_lock = Lock()
+
 
 def _discover() -> None:
-    if _registry:
-        return
-    for module_info in pkgutil.iter_modules(__path__):
-        if module_info.name in _INFRA_MODULES or module_info.name.startswith('_'):
-            continue
-        module = importlib.import_module(f'{__name__}.{module_info.name}')
-        strategy = getattr(module, 'STRATEGY', None)
-        if strategy is None:
-            continue
-        if strategy.meta.name in _registry:
-            raise RuntimeError(f'策略标识重复：{strategy.meta.name}')
-        _registry[strategy.meta.name] = strategy
+    with _discovery_lock:
+        if _registry:
+            return
+        discovered = {}
+        for module_info in pkgutil.iter_modules(__path__):
+            if module_info.name in _INFRA_MODULES or module_info.name.startswith('_'):
+                continue
+            module = importlib.import_module(f'{__name__}.{module_info.name}')
+            strategy = getattr(module, 'STRATEGY', None)
+            if strategy is None:
+                continue
+            if strategy.meta.name in discovered:
+                raise RuntimeError(f'策略标识重复：{strategy.meta.name}')
+            discovered[strategy.meta.name] = strategy
+
+        _registry.update(discovered)
 
 
 def get_strategy(name: str) -> Optional[BaseStrategy]:

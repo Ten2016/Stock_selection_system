@@ -21,6 +21,9 @@ class RiseThenFallStrategy(BaseStrategy):
         ],
     )
 
+    def required_klines(self, x_days: int = 30, z_days: int = 3, **params) -> int:
+        return max(self.min_klines, x_days + z_days + 5)
+
     def check(self, klines: List, x_days: int = 30, y_pct: float = 5.0, z_days: int = 3) -> Optional[dict]:
         if len(klines) < x_days + z_days + 5:
             return None

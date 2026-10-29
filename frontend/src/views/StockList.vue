@@ -118,6 +118,7 @@ const chartDialogVisible = ref(false)
 const selectedStockCode = ref('')
 const sortBy = ref('total_cap')
 const sortOrder = ref('desc')
+let loadVersion = 0
 
 const formatNumber = (value, digits = 2) => {
   if (value == null || value === '') return '-'
@@ -126,6 +127,7 @@ const formatNumber = (value, digits = 2) => {
 }
 
 const loadStocks = async () => {
+  const version = ++loadVersion
   loading.value = true
   try {
     const params = {
@@ -136,12 +138,13 @@ const loadStocks = async () => {
     }
     if (searchKeyword.value) params.search = searchKeyword.value
     const res = await api.get('/stocks', { params })
+    if (version !== loadVersion) return
     stocks.value = res.data.list || []
     total.value = res.data.total || 0
   } catch (error) {
     console.error(error)
   } finally {
-    loading.value = false
+    if (version === loadVersion) loading.value = false
   }
 }
 
@@ -155,6 +158,8 @@ const clearAllStockData = async () => {
     clearingAll.value = true
     const res = await api.delete('/stocks/all')
     ElMessage.success(res.msg)
+    currentPage.value = 1
+    chartDialogVisible.value = false
     await loadStocks()
   } catch (error) {
     console.error(error)

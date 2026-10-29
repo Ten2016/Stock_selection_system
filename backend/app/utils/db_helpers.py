@@ -10,4 +10,4 @@ def apply_pagination(query: Query, skip: int = 0, limit: int = 50):
 
 
 def safe_like(value: str) -> str:
-    return value.replace('%', '\\%').replace('_', '\\_')
+    return value.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
